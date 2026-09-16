@@ -1,0 +1,356 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  nama         String   @db.VarChar(100)
+  email        String   @unique @db.VarChar(150)
+  passwordHash String   @map("password_hash") @db.VarChar(255)
+  createdAt    DateTime @default(now()) @map("created_at") @db.DateTime(0)
+  
+  journalEntries      JournalEntry[]
+  aiAuditLogs         AiAuditLog[]
+  
+  @@map("users")
+}
+
+model ChartOfAccount {
+  kodeAkun     String   @id @map("kode_akun") @db.VarChar(10)
+  namaAkun     String   @map("nama_akun") @db.VarChar(150)
+  tipeAkun     String   @map("tipe_akun") @db.VarChar(50)
+  parentKode   String?  @map("parent_kode") @db.VarChar(10)
+  normalBalance String  @map("normal_balance") @db.VarChar(10)
+  isActive     Boolean  @default(true) @map("is_active")
+  
+  parent       ChartOfAccount?         @relation("ChartOfAccountHierarchy", fields: [parentKode], references: [kodeAkun])
+  children     ChartOfAccount[]        @relation("ChartOfAccountHierarchy")
+  
+  transactionTypesDebit  TransactionType[] @relation("TransactionTypeDebit")
+  transactionTypesKredit TransactionType[] @relation("TransactionTypeKredit")
+  
+  journalEntryLines      JournalEntryLine[]
+  indirectCostsDebit     IndirectCost[] @relation("IndirectCostDebit")
+  indirectCostsKredit    IndirectCost[] @relation("IndirectCostKredit")
+  cashTransactionsDebit  CashTransaction[] @relation("CashTransactionDebit")
+  cashTransactionsKredit CashTransaction[] @relation("CashTransactionKredit")
+  
+  @@map("chart_of_accounts")
+}
+
+model TransactionType {
+  id               Int      @id @default(autoincrement())
+  kategori         String   @db.VarChar(50)
+  namaTransaksi    String   @map("nama_transaksi") @db.VarChar(150)
+  akunDebitKode    String?  @map("akun_debit_kode") @db.VarChar(10)
+  akunKreditKode   String?  @map("akun_kredit_kode") @db.VarChar(10)
+  isActive         Boolean  @default(true) @map("is_active")
+  
+  akunDebit        ChartOfAccount? @relation("TransactionTypeDebit", fields: [akunDebitKode], references: [kodeAkun])
+  akunKredit       ChartOfAccount? @relation("TransactionTypeKredit", fields: [akunKreditKode], references: [kodeAkun])
+  
+  @@map("transaction_types")
+}
+
+model Supplier {
+  id             Int      @id @default(autoincrement())
+  kodeSupplier   String   @unique @map("kode_supplier") @db.VarChar(20)
+  nama           String   @db.VarChar(150)
+  alamat         String?  @db.VarChar(255)
+  contactPerson  String?  @map("contact_person") @db.VarChar(100)
+  telp           String?  @db.VarChar(30)
+  bankNama       String?  @map("bank_nama") @db.VarChar(100)
+  rekening       String?  @db.VarChar(50)
+  saldoHutang    Decimal  @default(0) @map("saldo_hutang") @db.Decimal(15, 2)
+  keterangan     String?  @db.Text
+  createdAt      DateTime @default(now()) @map("created_at") @db.DateTime(0)
+  
+  directCosts    DirectCost[]
+  
+  @@map("suppliers")
+}
+
+model Customer {
+  id             Int      @id @default(autoincrement())
+  kodeCustomer   String   @unique @map("kode_customer") @db.VarChar(20)
+  nama           String   @db.VarChar(150)
+  status         String?  @db.VarChar(50)
+  alamat         String?  @db.VarChar(255)
+  contactPerson  String?  @map("contact_person") @db.VarChar(100)
+  telp           String?  @db.VarChar(30)
+  bankNama       String?  @map("bank_nama") @db.VarChar(100)
+  rekening       String?  @db.VarChar(50)
+  saldoPiutang   Decimal  @default(0) @map("saldo_piutang") @db.Decimal(15, 2)
+  keterangan     String?  @db.Text
+  createdAt      DateTime @default(now()) @map("created_at") @db.DateTime(0)
+  
+  orders         Order[]
+  partnerStores  PartnerStore[]
+  
+  @@map("customers")
+}
+
+model Product {
+  id            Int      @id @default(autoincrement())
+  kodeProduk    String   @unique @map("kode_produk") @db.VarChar(20)
+  namaBarang    String   @map("nama_barang") @db.VarChar(100)
+  varian        String?  @db.VarChar(100)
+  satuan        String   @default("pcs") @db.VarChar(20)
+  hargaDefault  Decimal  @default(0) @map("harga_default") @db.Decimal(15, 2)
+  stokSaatIni   Int      @default(0) @map("stok_saat_ini")
+  stokMinimum   Int      @default(0) @map("stok_minimum")
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at") @db.DateTime(0)
+  
+  orders        Order[]
+  stockMovements StockMovement[]
+  
+  @@map("products")
+}
+
+model JournalEntry {
+  id            Int      @id @default(autoincrement())
+  tanggal       DateTime @db.Date
+  deskripsi     String?  @db.VarChar(255)
+  sumberTabel   String   @map("sumber_tabel") @db.VarChar(50)
+  sumberId      Int?     @map("sumber_id")
+  businessUnit  String   @map("business_unit") @db.VarChar(50)
+  dibuatOleh    Int      @map("dibuat_oleh")
+  viaAi         Boolean  @default(false) @map("via_ai")
+  createdAt     DateTime @default(now()) @map("created_at") @db.DateTime(0)
+  
+  user          User     @relation(fields: [dibuatOleh], references: [id])
+  lines         JournalEntryLine[]
+  
+  // Relations to source tables
+  orders         Order[]
+  directCosts    DirectCost[]
+  indirectCosts  IndirectCost[]
+  cashTransactions CashTransaction[]
+  debtPayments   DebtPayment[]
+  
+  @@map("journal_entries")
+  @@index([tanggal])
+  @@index([businessUnit])
+}
+
+model JournalEntryLine {
+  id              Int      @id @default(autoincrement())
+  journalEntryId  Int      @map("journal_entry_id")
+  akunKode        String   @map("akun_kode") @db.VarChar(10)
+  debit           Decimal  @default(0) @db.Decimal(15, 2)
+  kredit          Decimal  @default(0) @db.Decimal(15, 2)
+  
+  journalEntry    JournalEntry  @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  akun            ChartOfAccount @relation(fields: [akunKode], references: [kodeAkun])
+  
+  @@map("journal_entry_lines")
+  @@index([akunKode])
+}
+
+model Order {
+  id                Int      @id @default(autoincrement())
+  kodeOrder         String   @unique @map("kode_order") @db.VarChar(20)
+  tanggal           DateTime @db.Date
+  businessUnit     String   @map("business_unit") @db.VarChar(50)
+  jenisOrder        String   @map("jenis_order") @db.VarChar(50)
+  customerId        Int?     @map("customer_id")
+  namaPemesan       String?  @map("nama_pemesan") @db.VarChar(100)
+  productId         Int      @map("product_id")
+  keterangan        String?  @db.VarChar(255)
+  jumlahPesan       Int      @map("jumlah_pesan")
+  hargaSatuan       Decimal  @map("harga_satuan") @db.Decimal(15, 2)
+  totalInvoice      Decimal  @map("total_invoice") @db.Decimal(15, 2)
+  jumlahBayar       Decimal  @default(0) @map("jumlah_bayar") @db.Decimal(15, 2)
+  sisaPiutang       Decimal  @map("sisa_piutang") @db.Decimal(15, 2)
+  jenisKas          String?  @map("jenis_kas") @db.VarChar(50)
+  journalEntryId    Int?     @map("journal_entry_id")
+  sumberInput       String   @default("MANUAL") @map("sumber_input") @db.VarChar(50)
+  createdAt         DateTime @default(now()) @map("created_at") @db.DateTime(0)
+  
+  customer          Customer?   @relation(fields: [customerId], references: [id])
+  product           Product     @relation(fields: [productId], references: [id])
+  journalEntry      JournalEntry? @relation(fields: [journalEntryId], references: [id])
+  stockMovements    StockMovement[]
+  
+  @@map("orders")
+  @@index([tanggal])
+  @@index([businessUnit])
+  @@index([jenisOrder])
+}
+
+model DirectCost {
+  id                Int      @id @default(autoincrement())
+  kode              String   @unique @db.VarChar(20)
+  tanggal           DateTime @db.Date
+  businessUnit     String   @map("business_unit") @db.VarChar(50)
+  transaksi         String   @db.VarChar(150)
+  detailTransaksi   String?  @map("detail_transaksi") @db.VarChar(255)
+  supplierId        Int?     @map("supplier_id")
+  jenisKas          String?  @map("jenis_kas") @db.VarChar(50)
+  nominal           Decimal  @db.Decimal(15, 2)
+  journalEntryId    Int?     @map("journal_entry_id")
+  sumberInput       String   @default("MANUAL") @map("sumber_input") @db.VarChar(50)
+  createdAt         DateTime @default(now()) @map("created_at") @db.DateTime(0)
+  
+  supplier          Supplier?     @relation(fields: [supplierId], references: [id])
+  journalEntry      JournalEntry? @relation(fields: [journalEntryId], references: [id])
+  
+  @@map("direct_costs")
+  @@index([tanggal])
+  @@index([businessUnit])
+}
+
+model IndirectCost {
+  id                Int      @id @default(autoincrement())
+  kode              String   @unique @db.VarChar(20)
+  tanggal           DateTime @db.Date
+  businessUnit     String   @map("business_unit") @db.VarChar(50)
+  transaksi         String   @db.VarChar(150)
+  detail            String?  @db.VarChar(255)
+  jenisKas          String?  @map("jenis_kas") @db.VarChar(50)
+  nominal           Decimal  @db.Decimal(15, 2)
+  akunDebitKode     String?  @map("akun_debit_kode") @db.VarChar(10)
+  akunKreditKode    String?  @map("akun_kredit_kode") @db.VarChar(10)
+  journalEntryId    Int?     @map("journal_entry_id")
+  sumberInput       String   @default("MANUAL") @map("sumber_input") @db.VarChar(50)
+  createdAt         DateTime @default(now()) @map("created_at") @db.DateTime(0)
+  
+  akunDebit         ChartOfAccount? @relation("IndirectCostDebit", fields: [akunDebitKode], references: [kodeAkun])
+  akunKredit        ChartOfAccount? @relation("IndirectCostKredit", fields: [akunKreditKode], references: [kodeAkun])
+  journalEntry      JournalEntry? @relation(fields: [journalEntryId], references: [id])
+  
+  @@map("indirect_costs")
+  @@index([tanggal])
+  @@index([businessUnit])
+}
+
+model CashTransaction {
+  id                Int      @id @default(autoincrement())
+  kode              String   @unique @db.VarChar(20)
+  tanggal           DateTime @db.Date
+  businessUnit     String   @map("business_unit") @db.VarChar(50)
+  tipe              String   @db.VarChar(50)
+  transaksi         String   @db.VarChar(150)
+  keterangan        String?  @db.VarChar(255)
+  jenisKas          String?  @map("jenis_kas") @db.VarChar(50)
+  nominal           Decimal  @db.Decimal(15, 2)
+  akunDebitKode     String?  @map("akun_debit_kode") @db.VarChar(10)
+  akunKreditKode    String?  @map("akun_kredit_kode") @db.VarChar(10)
+  journalEntryId    Int?     @map("journal_entry_id")
+  sumberInput       String   @default("MANUAL") @map("sumber_input") @db.VarChar(50)
+  createdAt         DateTime @default(now()) @map("created_at") @db.DateTime(0)
+  
+  akunDebit         ChartOfAccount? @relation("CashTransactionDebit", fields: [akunDebitKode], references: [kodeAkun])
+  akunKredit        ChartOfAccount? @relation("CashTransactionKredit", fields: [akunKreditKode], references: [kodeAkun])
+  journalEntry      JournalEntry? @relation(fields: [journalEntryId], references: [id])
+  
+  @@map("cash_transactions")
+  @@index([tanggal])
+  @@index([businessUnit])
+}
+
+model Debt {
+  id              Int      @id @default(autoincrement())
+  namaKreditur    String   @map("nama_kreditur") @db.VarChar(150)
+  jaminan         String?  @db.VarChar(150)
+  jumlahPinjaman  Decimal  @map("jumlah_pinjaman") @db.Decimal(15, 2)
+  tanggalMulai    DateTime? @map("tanggal_mulai") @db.Date
+  sisaHutang      Decimal  @map("sisa_hutang") @db.Decimal(15, 2)
+  createdAt       DateTime @default(now()) @map("created_at") @db.DateTime(0)
+  
+  payments        DebtPayment[]
+  
+  @@map("debts")
+}
+
+model DebtPayment {
+  id                Int      @id @default(autoincrement())
+  debtId            Int      @map("debt_id")
+  periode           String   @db.VarChar(7)
+  jumlahBayar       Decimal  @default(0) @map("jumlah_bayar") @db.Decimal(15, 2)
+  statusBayar       String   @default("BELUM_BAYAR") @map("status_bayar") @db.VarChar(50)
+  journalEntryId    Int?     @map("journal_entry_id")
+  
+  debt              Debt          @relation(fields: [debtId], references: [id], onDelete: Cascade)
+  journalEntry      JournalEntry? @relation(fields: [journalEntryId], references: [id])
+  
+  @@unique([debtId, periode])
+  @@map("debt_payments")
+}
+
+model StockMovement {
+  id            Int      @id @default(autoincrement())
+  productId     Int      @map("product_id")
+  tanggal       DateTime @db.Date
+  tipe          String   @db.VarChar(50)
+  jumlah        Int
+  keterangan    String?  @db.VarChar(255)
+  orderId       Int?     @map("order_id")
+  sumberInput   String   @default("MANUAL") @map("sumber_input") @db.VarChar(50)
+  createdAt     DateTime @default(now()) @map("created_at") @db.DateTime(0)
+  
+  product       Product     @relation(fields: [productId], references: [id])
+  order         Order?      @relation(fields: [orderId], references: [id])
+  
+  @@map("stock_movements")
+  @@index([tanggal])
+  @@index([productId])
+}
+
+model PartnerStore {
+  id                      Int      @id @default(autoincrement())
+  customerId             Int      @map("customer_id")
+  jadwalCekBerikutnya     DateTime? @map("jadwal_cek_berikutnya") @db.Date
+  intervalHari            Int      @default(14) @map("interval_hari")
+  
+  customer                Customer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  checks                  PartnerStoreCheck[]
+  
+  @@map("partner_stores")
+}
+
+model PartnerStoreCheck {
+  id                Int      @id @default(autoincrement())
+  partnerStoreId    Int      @map("partner_store_id")
+  tanggalCek        DateTime @map("tanggal_cek") @db.Date
+  catatan           String?  @db.Text
+  
+  partnerStore      PartnerStore @relation(fields: [partnerStoreId], references: [id], onDelete: Cascade)
+  
+  @@map("partner_store_checks")
+}
+
+model AiAuditLog {
+  id            Int      @id @default(autoincrement())
+  userId        Int      @map("user_id")
+  sheet         String   @db.VarChar(50)
+  action        String   @db.VarChar(50)
+  source        String   @db.VarChar(50)
+  command       String?  @db.VarChar(50)
+  recordLabel   String   @map("record_label") @db.VarChar(150)
+  detail        String?  @db.VarChar(255)
+  perubahanJson String?  @map("perubahan_json") @db.Text
+  inputText     String?  @map("input_text") @db.Text
+  parsedResult  String?  @map("parsed_result") @db.Text
+  targetTabel   String?  @map("target_tabel") @db.VarChar(50)
+  targetId      Int?     @map("target_id")
+  status        String   @default("CONFIRMED") @db.VarChar(50)
+  confirmedAt   DateTime? @map("confirmed_at") @db.DateTime(0)
+  createdAt     DateTime @default(now()) @map("created_at") @db.DateTime(0)
+  
+  user          User     @relation(fields: [userId], references: [id])
+  
+  @@map("ai_audit_log")
+  @@index([sheet])
+  @@index([source])
+  @@index([createdAt])
+}
