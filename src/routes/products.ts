@@ -3,6 +3,7 @@ import { authenticate, AuthRequest } from '../middleware/auth';
 import { successResponse, errorResponse } from '../utils/response';
 import prisma from '../utils/database';
 import { logManualAction } from '../services/auditLogService';
+import { AksiLog } from '@prisma/client';
 
 const router = Router();
 
@@ -12,23 +13,25 @@ router.use(authenticate);
 // GET /products
 router.get('/', async (req: AuthRequest, res: Response, next) => {
   try {
-    const { search, is_active } = req.query;
+    const { search, is_active, aktif } = req.query;
     
     const where: any = {};
     if (search) {
       where.OR = [
         { namaBarang: { contains: search as string } },
         { varian: { contains: search as string } },
-        { kodeProduk: { contains: search as string } },
+        { kode: { contains: search as string } },
       ];
     }
-    if (is_active !== undefined) {
-      where.isActive = is_active === 'true';
+    if (aktif !== undefined) {
+      where.aktif = aktif === 'true';
+    } else if (is_active !== undefined) {
+      where.aktif = is_active === 'true';
     }
 
-    const products = await prisma.product.findMany({
+    const products = await prisma.produk.findMany({
       where,
-      orderBy: { createdAt: 'desc' }
+      orderBy: { dibuatPada: 'desc' }
     });
 
     res.json(successResponse(products));
@@ -40,7 +43,7 @@ router.get('/', async (req: AuthRequest, res: Response, next) => {
 // GET /products/:id
 router.get('/:id', async (req: AuthRequest, res: Response, next) => {
   try {
-    const product = await prisma.product.findUnique({
+    const product = await prisma.produk.findUnique({
       where: { id: parseInt(String(req.params.id)) }
     });
 
@@ -57,31 +60,42 @@ router.get('/:id', async (req: AuthRequest, res: Response, next) => {
 // POST /products
 router.post('/', async (req: AuthRequest, res: Response, next) => {
   try {
-    const { kode_produk, nama_barang, varian, satuan, harga_default, stok_minimum } = req.body;
+    const {
+      kode,
+      kode_produk,
+      nama_barang,
+      namaBarang,
+      varian,
+      satuan,
+      harga_default,
+      hargaDefault,
+    } = req.body;
     
-    if (!kode_produk || !nama_barang) {
-      throw errorResponse('kode_produk and nama_barang are required');
+    const finalKode = kode || kode_produk;
+    const finalNama = namaBarang || nama_barang;
+
+    if (!finalKode || !finalNama) {
+      throw errorResponse('kode (kode_produk) and namaBarang (nama_barang) are required');
     }
 
-    const product = await prisma.product.create({
+    const product = await prisma.produk.create({
       data: {
-        kodeProduk: kode_produk,
-        namaBarang: nama_barang,
+        kode: finalKode,
+        namaBarang: finalNama,
         varian,
         satuan: satuan || 'pcs',
-        hargaDefault: harga_default || 0,
-        stokMinimum: stok_minimum || 0,
+        hargaDefault: (hargaDefault ?? harga_default) || 0,
+        aktif: true,
       }
     });
 
     // Log audit
     await logManualAction(
       req.user!.id,
-      'STOK',
-      'CREATE',
+      'produk',
+      AksiLog.TAMBAH,
       product.namaBarang,
       `Product created: ${product.namaBarang}`,
-      'products',
       product.id
     );
 
@@ -95,27 +109,47 @@ router.post('/', async (req: AuthRequest, res: Response, next) => {
 router.put('/:id', async (req: AuthRequest, res: Response, next) => {
   try {
     const id = parseInt(String(req.params.id));
-    const updates = req.body;
+    const {
+      kode,
+      kode_produk,
+      nama_barang,
+      namaBarang,
+      varian,
+      satuan,
+      harga_default,
+      hargaDefault,
+      aktif,
+      is_active
+    } = req.body;
     
-    // Remove calculated fields
-    delete updates.stok_saat_ini;
-    delete updates.created_at;
+    const existing = await prisma.produk.findUnique({ where: { id } });
+    if (!existing) {
+      throw errorResponse('Product not found', 404);
+    }
 
-    const product = await prisma.product.update({
+    const updateData: any = {};
+    if (kode || kode_produk) updateData.kode = kode || kode_produk;
+    if (namaBarang || nama_barang) updateData.namaBarang = namaBarang || nama_barang;
+    if (varian !== undefined) updateData.varian = varian;
+    if (satuan !== undefined) updateData.satuan = satuan;
+    if (hargaDefault !== undefined || harga_default !== undefined) updateData.hargaDefault = hargaDefault ?? harga_default;
+    if (aktif !== undefined || is_active !== undefined) updateData.aktif = (aktif !== undefined ? aktif : is_active) === true;
+
+    const product = await prisma.produk.update({
       where: { id },
-      data: updates
+      data: updateData
     });
 
     // Log audit
     await logManualAction(
       req.user!.id,
-      'STOK',
-      'UPDATE',
+      'produk',
+      AksiLog.UBAH,
       product.namaBarang,
       `Product updated: ${product.namaBarang}`,
-      'products',
       product.id,
-      { field: 'product', sebelum: '', sesudah: JSON.stringify(updates) }
+      existing,
+      updateData
     );
 
     res.json(successResponse(product));
@@ -129,19 +163,18 @@ router.delete('/:id', async (req: AuthRequest, res: Response, next) => {
   try {
     const id = parseInt(String(req.params.id));
     
-    const product = await prisma.product.update({
+    const product = await prisma.produk.update({
       where: { id },
-      data: { isActive: false }
+      data: { aktif: false }
     });
 
     // Log audit
     await logManualAction(
       req.user!.id,
-      'STOK',
-      'DELETE',
+      'produk',
+      AksiLog.HAPUS,
       product.namaBarang,
       `Product soft deleted: ${product.namaBarang}`,
-      'products',
       product.id
     );
 

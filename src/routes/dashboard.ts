@@ -2,8 +2,19 @@ import { Router, Request, Response } from 'express';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { successResponse } from '../utils/response';
 import prisma from '../utils/database';
+import { KODE_JENIS_BAWAAN } from '../utils/jenisBawaan';
 
 const router = Router();
+
+// Tidak di-cache secara sengaja: jenis bawaan ini full-CRUD oleh user,
+// jadi ID-nya bisa berubah kapan saja - selalu query ulang.
+async function orderJenisIds(): Promise<number[]> {
+  const list = await prisma.jenisTransaksi.findMany({
+    where: { kode: { in: [KODE_JENIS_BAWAAN.PENDAPATAN_FROZEN, KODE_JENIS_BAWAAN.PENDAPATAN_SIAP_SAJI] } },
+    select: { id: true },
+  });
+  return list.map((j) => j.id);
+}
 
 router.use(authenticate);
 
@@ -24,24 +35,26 @@ router.get('/summary', async (req: AuthRequest, res: Response, next) => {
       startDate.setDate(today.getDate() - 30);
     }
 
-    // Get cash balance (account 11100 - Kas Utama)
-    const cashBalance = await prisma.journalEntryLine.aggregate({
-      where: {
-        akunKode: '11100',
-        journalEntry: {
-          tanggal: { lte: today }
-        }
-      },
-      _sum: {
-        debit: true,
-        kredit: true
-      }
-    });
+    // Saldo kas: sejak Debit/Kredit jadi teks bebas (bukan akun yang
+    // divalidasi), "Kas Utama" beneran tidak bisa dihitung lagi dari
+    // jurnal. Estimasi terbaik yang masih valid: net kas masuk (semua
+    // entri arah PEMASUKAN) dikurangi kas keluar (arah PENGELUARAN) dari
+    // seluruh histori transaksi - sama seperti dasar hitung Laba-Rugi.
+    const [pemasukanAgg, pengeluaranAgg] = await Promise.all([
+      prisma.transaksi.aggregate({
+        where: { tanggal: { lte: today }, jenisTransaksi: { arah: 'PEMASUKAN' } },
+        _sum: { nominal: true },
+      }),
+      prisma.transaksi.aggregate({
+        where: { tanggal: { lte: today }, jenisTransaksi: { arah: 'PENGELUARAN' } },
+        _sum: { nominal: true },
+      }),
+    ]);
 
-    const saldo_kas = Number(cashBalance._sum.debit || 0) - Number(cashBalance._sum.kredit || 0);
+    const saldo_kas = Number(pemasukanAgg._sum.nominal || 0) - Number(pengeluaranAgg._sum.nominal || 0);
 
     // Get accounts receivable
-    const customersWithDebt = await prisma.customer.findMany({
+    const customersWithDebt = await prisma.dataPelanggan.findMany({
       where: { saldoPiutang: { gt: 0 } }
     });
 
@@ -51,7 +64,7 @@ router.get('/summary', async (req: AuthRequest, res: Response, next) => {
     };
 
     // Get accounts payable
-    const suppliersWithDebt = await prisma.supplier.findMany({
+    const suppliersWithDebt = await prisma.dataPemasok.findMany({
       where: { saldoHutang: { gt: 0 } }
     });
 
@@ -60,14 +73,16 @@ router.get('/summary', async (req: AuthRequest, res: Response, next) => {
     };
 
     // Get new orders
-    const newOrders = await prisma.order.findMany({
+    const newOrders = await prisma.transaksi.findMany({
       where: {
+        jenisTransaksiId: { in: await orderJenisIds() },
         tanggal: { gte: startDate }
       }
     });
 
     const orderBreakdown = newOrders.reduce((acc, order) => {
-      acc[order.jenisOrder] = (acc[order.jenisOrder] || 0) + 1;
+      const src = order.sumberOrder || 'LAIN';
+      acc[src] = (acc[src] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
 
@@ -99,13 +114,14 @@ router.get('/tren-penjualan', async (req: AuthRequest, res: Response, next) => {
       startDate.setDate(today.getDate() - 30);
     }
 
-    const orders = await prisma.order.findMany({
+    const orders = await prisma.transaksi.findMany({
       where: {
+        jenisTransaksiId: { in: await orderJenisIds() },
         tanggal: { gte: startDate, lte: today }
       },
       select: {
         tanggal: true,
-        totalInvoice: true
+        nominal: true,
       }
     });
 
@@ -115,7 +131,7 @@ router.get('/tren-penjualan', async (req: AuthRequest, res: Response, next) => {
       if (!acc[dateKey]) {
         acc[dateKey] = { tanggal: dateKey, total: 0 };
       }
-      acc[dateKey].total += Number(order.totalInvoice);
+      acc[dateKey].total += Number(order.nominal);
       return acc;
     }, {} as Record<string, { tanggal: string; total: number }>);
 
@@ -129,27 +145,9 @@ router.get('/tren-penjualan', async (req: AuthRequest, res: Response, next) => {
   }
 });
 
-// GET /dashboard/peringatan-stok
-router.get('/peringatan-stok', async (req: AuthRequest, res: Response, next) => {
-  try {
-    const products = await prisma.product.findMany({
-      where: {
-        isActive: true,
-        stokSaatIni: { lte: prisma.product.fields.stokMinimum }
-      }
-    });
-
-    const warnings = products.map(p => ({
-      product: p.namaBarang,
-      stok_saat_ini: p.stokSaatIni,
-      stok_minimum: p.stokMinimum,
-      level: p.stokSaatIni === 0 ? 'KRITIS' : 'MENIPIS'
-    }));
-
-    res.json(successResponse(warnings));
-  } catch (error) {
-    next(error);
-  }
+// GET /dashboard/peringatan-stok (parked)
+router.get('/peringatan-stok', async (req: AuthRequest, res: Response) => {
+  res.json(successResponse([]));
 });
 
 // GET /dashboard/aktivitas-terbaru
@@ -157,11 +155,11 @@ router.get('/aktivitas-terbaru', async (req: AuthRequest, res: Response, next) =
   try {
     const { limit = 10 } = req.query;
     
-    const activities = await prisma.aiAuditLog.findMany({
+    const activities = await prisma.logAudit.findMany({
       take: Number(limit),
-      orderBy: { createdAt: 'desc' },
+      orderBy: { dibuatPada: 'desc' },
       include: {
-        user: {
+        pengguna: {
           select: {
             nama: true,
             email: true
@@ -170,7 +168,17 @@ router.get('/aktivitas-terbaru', async (req: AuthRequest, res: Response, next) =
       }
     });
 
-    res.json(successResponse(activities));
+    const transformed = activities.map(a => ({
+      ...a,
+      sheet: a.tabelTarget,
+      source: a.sumber,
+      action: a.aksi,
+      recordLabel: a.labelRecord,
+      createdAt: a.dibuatPada,
+      user: a.pengguna,
+    }));
+
+    res.json(successResponse(transformed));
   } catch (error) {
     next(error);
   }

@@ -1,33 +1,24 @@
-import { Router, Request, Response } from 'express';
+import { Router, Response } from 'express';
 import { authenticate, AuthRequest } from '../middleware/auth';
-import { successResponse, errorResponse } from '../utils/response';
-import prisma from '../utils/database';
-import { logManualAction } from '../services/auditLogService';
+import { successResponse } from '../utils/response';
 
 const router = Router();
 
 router.use(authenticate);
 
+// NOTE: Fitur Stok & StockMovement dipark pada restrukturisasi skema Bahasa Indonesia
+// (Model StockMovement tidak dibawa ke schema baru karena di luar fokus data Excel client).
+// Route logic di bawah dikomentari agar mudah direstore jika modul stok diaktifkan kembali.
+
+/*
 // GET /stock
 router.get('/', async (req: AuthRequest, res: Response, next) => {
   try {
-    const products = await prisma.product.findMany({
-      where: { isActive: true },
+    const products = await prisma.produk.findMany({
+      where: { aktif: true },
       orderBy: { namaBarang: 'asc' }
     });
-
-    const stockData = products.map(p => {
-      const status = p.stokSaatIni <= p.stokMinimum ? 'MENIPIS' : 'AMAN';
-      const level = p.stokSaatIni === 0 ? 'KRITIS' : status;
-      
-      return {
-        ...p,
-        status,
-        level,
-      };
-    });
-
-    res.json(successResponse(stockData));
+    res.json(successResponse(products));
   } catch (error) {
     next(error);
   }
@@ -36,22 +27,7 @@ router.get('/', async (req: AuthRequest, res: Response, next) => {
 // GET /stock/:product_id/movements
 router.get('/:product_id/movements', async (req: AuthRequest, res: Response, next) => {
   try {
-    const productId = parseInt(String(req.params.product_id));
-    
-    const movements = await prisma.stockMovement.findMany({
-      where: { productId },
-      include: {
-        order: {
-          select: {
-            kodeOrder: true,
-            jenisOrder: true,
-          }
-        }
-      },
-      orderBy: { tanggal: 'desc' }
-    });
-
-    res.json(successResponse(movements));
+    res.json(successResponse([]));
   } catch (error) {
     next(error);
   }
@@ -60,56 +36,16 @@ router.get('/:product_id/movements', async (req: AuthRequest, res: Response, nex
 // POST /stock/movements
 router.post('/movements', async (req: AuthRequest, res: Response, next) => {
   try {
-    const { product_id, tanggal, tipe, jumlah, keterangan, order_id } = req.body;
-    
-    if (!product_id || !tanggal || !tipe || !jumlah) {
-      throw errorResponse('Missing required fields');
-    }
-
-    const result = await prisma.$transaction(async (tx) => {
-      // Create stock movement
-      const movement = await tx.stockMovement.create({
-        data: {
-          productId: product_id,
-          tanggal: new Date(tanggal),
-          tipe,
-          jumlah,
-          keterangan,
-          orderId: order_id,
-          sumberInput: 'MANUAL',
-        }
-      });
-
-      // Update product stock
-      const stockChange = tipe === 'MASUK' || tipe === 'RETUR' ? jumlah : -jumlah;
-      await tx.product.update({
-        where: { id: product_id },
-        data: {
-          stokSaatIni: { increment: stockChange }
-        }
-      });
-
-      return movement;
-    });
-
-    const product = await prisma.product.findUnique({
-      where: { id: product_id }
-    });
-
-    await logManualAction(
-      req.user!.id,
-      'STOK',
-      'CREATE',
-      product?.namaBarang || 'Unknown',
-      `Stock movement: ${tipe} ${jumlah} units`,
-      'stock_movements',
-      result.id
-    );
-
-    res.json(successResponse(result));
+    res.json(successResponse({ message: 'Stock movements are parked in current schema' }));
   } catch (error) {
     next(error);
   }
+});
+*/
+
+// Placeholder fallback handler
+router.get('/', async (req: AuthRequest, res: Response) => {
+  res.json(successResponse({ message: 'Modul stok sedang dipark pada versi skema saat ini', data: [] }));
 });
 
 export default router;

@@ -10,8 +10,8 @@ router.use(authenticate);
 // GET /accounts (read-only)
 router.get('/', async (req: AuthRequest, res: Response, next) => {
   try {
-    const accounts = await prisma.chartOfAccount.findMany({
-      where: { isActive: true },
+    const accounts = await prisma.jenisAkun.findMany({
+      where: { aktif: true },
       orderBy: { kodeAkun: 'asc' }
     });
 

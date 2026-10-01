@@ -10,7 +10,7 @@ export interface LoginParams {
 }
 
 export const login = async (params: LoginParams) => {
-  const user = await prisma.user.findUnique({
+  const user = await prisma.pengguna.findUnique({
     where: { email: params.email }
   });
 

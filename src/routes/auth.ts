@@ -25,13 +25,13 @@ router.post('/login', async (req: Request, res: Response, next) => {
 // GET /auth/me
 router.get('/me', authenticate, async (req: AuthRequest, res: Response, next) => {
   try {
-    const user = await prisma.user.findUnique({
+    const user = await prisma.pengguna.findUnique({
       where: { id: req.user!.id },
       select: {
         id: true,
         nama: true,
         email: true,
-        createdAt: true,
+        dibuatPada: true,
       }
     });
 

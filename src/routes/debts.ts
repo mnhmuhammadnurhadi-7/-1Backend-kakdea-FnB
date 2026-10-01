@@ -1,9 +1,10 @@
-import { Router, Request, Response } from 'express';
+import { Router, Response } from 'express';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { successResponse, errorResponse } from '../utils/response';
 import prisma from '../utils/database';
-import { createFromSource } from '../services/journalService';
 import { logManualAction } from '../services/auditLogService';
+import { AksiLog, SumberInput } from '@prisma/client';
+import { KODE_JENIS_BAWAAN, getJenisBawaan } from '../utils/jenisBawaan';
 
 const router = Router();
 
@@ -12,13 +13,10 @@ router.use(authenticate);
 // GET /debts
 router.get('/', async (req: AuthRequest, res: Response, next) => {
   try {
-    const debts = await prisma.debt.findMany({
-      include: {
-        payments: true
-      },
-      orderBy: { createdAt: 'desc' }
+    const debts = await prisma.hutang.findMany({
+      include: { transaksi: { orderBy: { tanggal: 'desc' } } },
+      orderBy: { dibuatPada: 'desc' },
     });
-
     res.json(successResponse(debts));
   } catch (error) {
     next(error);
@@ -28,11 +26,11 @@ router.get('/', async (req: AuthRequest, res: Response, next) => {
 // GET /debts/:id/payments
 router.get('/:id/payments', async (req: AuthRequest, res: Response, next) => {
   try {
-    const payments = await prisma.debtPayment.findMany({
-      where: { debtId: parseInt(String(req.params.id)) },
-      orderBy: { periode: 'desc' }
+    const debtId = parseInt(String(req.params.id));
+    const payments = await prisma.transaksi.findMany({
+      where: { hutangId: debtId },
+      orderBy: { tanggal: 'desc' },
     });
-
     res.json(successResponse(payments));
   } catch (error) {
     next(error);
@@ -42,31 +40,26 @@ router.get('/:id/payments', async (req: AuthRequest, res: Response, next) => {
 // POST /debts
 router.post('/', async (req: AuthRequest, res: Response, next) => {
   try {
-    const { nama_kreditur, jaminan, jumlah_pinjaman, tanggal_mulai } = req.body;
-    
-    if (!nama_kreditur || !jumlah_pinjaman) {
-      throw errorResponse('nama_kreditur and jumlah_pinjaman are required');
+    const { nama_kreditur, namaKreditur, jaminan, jumlah_pinjaman, jumlahPinjaman, tanggal_mulai, tanggalMulai } = req.body;
+
+    const finalKreditur = namaKreditur || nama_kreditur;
+    const finalJumlah = jumlahPinjaman ?? jumlah_pinjaman;
+
+    if (!finalKreditur || !finalJumlah) {
+      throw errorResponse('namaKreditur (nama_kreditur) dan jumlahPinjaman (jumlah_pinjaman) wajib diisi');
     }
 
-    const debt = await prisma.debt.create({
+    const debt = await prisma.hutang.create({
       data: {
-        namaKreditur: nama_kreditur,
+        namaKreditur: finalKreditur,
         jaminan,
-        jumlahPinjaman: jumlah_pinjaman,
-        tanggalMulai: tanggal_mulai ? new Date(tanggal_mulai) : null,
-        sisaHutang: jumlah_pinjaman,
-      }
+        jumlahPinjaman: finalJumlah,
+        tanggalMulai: (tanggalMulai || tanggal_mulai) ? new Date(tanggalMulai || tanggal_mulai) : null,
+        sisaHutang: finalJumlah,
+      },
     });
 
-    await logManualAction(
-      req.user!.id,
-      'TRANSAKSI',
-      'CREATE',
-      debt.namaKreditur,
-      `Debt created: ${debt.namaKreditur}`,
-      'debts',
-      debt.id
-    );
+    await logManualAction(req.user!.id, 'hutang', AksiLog.TAMBAH, debt.namaKreditur, `Hutang baru: ${debt.namaKreditur}`, debt.id);
 
     res.json(successResponse(debt));
   } catch (error) {
@@ -78,79 +71,54 @@ router.post('/', async (req: AuthRequest, res: Response, next) => {
 router.post('/:id/payments', async (req: AuthRequest, res: Response, next) => {
   try {
     const debtId = parseInt(String(req.params.id));
-    const { periode, jumlah_bayar } = req.body;
-    
-    if (!periode || !jumlah_bayar) {
-      throw errorResponse('periode and jumlah_bayar are required');
+    const { periode, jumlah_bayar, nominal, tanggal, detail, jenisKas, jenis_kas } = req.body;
+
+    const amount = Number(nominal ?? jumlah_bayar);
+    if (!amount || amount <= 0) {
+      throw errorResponse('nominal (jumlah_bayar) wajib diisi dan harus > 0');
     }
 
+    const hutang = await prisma.hutang.findUnique({ where: { id: debtId } });
+    if (!hutang) throw errorResponse('Hutang tidak ditemukan', 404);
+
+    const payDate = tanggal ? new Date(tanggal) : new Date();
+    const cashType = jenisKas || jenis_kas || 'Kas Utama';
+
+    // Jenis bawaan (kode MT1, di-seed di prisma/seed.ts) - tetap full-CRUD
+    // oleh user seperti jenis lain. Sejak 29 Sep 2026 tidak ada lagi
+    // jurnal - sisaHutang di tabel Hutang tetap jadi sumber kebenaran.
+    const jenisTrx = await getJenisBawaan(KODE_JENIS_BAWAAN.PEMBAYARAN_CICILAN_HUTANG);
+
     const result = await prisma.$transaction(async (tx) => {
-      const debt = await tx.debt.findUnique({
-        where: { id: debtId }
-      });
+      const trxKode = `MT-H${debtId}-${Date.now()}`;
 
-      if (!debt) {
-        throw errorResponse('Debt not found', 404);
-      }
-
-      // Create payment
-      const payment = await tx.debtPayment.create({
+      const trx = await tx.transaksi.create({
         data: {
-          debtId,
-          periode,
-          jumlahBayar: jumlah_bayar,
-          statusBayar: Number(jumlah_bayar) >= Number(debt.sisaHutang) ? 'LUNAS' : 'SEBAGIAN',
-        }
+          kode: trxKode,
+          tanggal: payDate,
+          unitBisnis: 'PABRIK',
+          jenisTransaksiId: jenisTrx.id,
+          namaTransaksi: jenisTrx.namaTransaksi,
+          detail: detail || `Pembayaran cicilan hutang ${hutang.namaKreditur}${periode ? ` periode ${periode}` : ''}`,
+          jenisKas: cashType,
+          nominal: amount,
+          debit: 'Hutang Usaha', // label informasional, teks bebas
+          kredit: cashType,
+          hutangId: debtId,
+          sumberInput: SumberInput.MANUAL,
+          dibuatOleh: req.user!.id,
+        },
       });
 
-      // Create journal entry
-      const journalEntry = await createFromSource({
-        tanggal: new Date(),
-        deskripsi: `Debt payment - ${debt.namaKreditur}`,
-        sumberTabel: 'DEBT_PAYMENT',
-        sumberId: payment.id,
-        businessUnit: 'PABRIK',
-        dibuatOleh: req.user!.id,
-        viaAi: false,
-        lines: [
-          {
-            akunKode: '21100', // Hutang Usaha
-            debit: jumlah_bayar,
-            kredit: 0,
-          },
-          {
-            akunKode: '11100', // Kas Utama
-            debit: 0,
-            kredit: jumlah_bayar,
-          }
-        ]
-      });
+      const newSisa = Math.max(0, Number(hutang.sisaHutang) - amount);
+      await tx.hutang.update({ where: { id: debtId }, data: { sisaHutang: newSisa } });
 
-      // Update payment with journal entry ID
-      await tx.debtPayment.update({
-        where: { id: payment.id },
-        data: { journalEntryId: journalEntry.id }
-      });
-
-      // Update debt balance
-      await tx.debt.update({
-        where: { id: debtId },
-        data: {
-          sisaHutang: { decrement: jumlah_bayar }
-        }
-      });
-
-      return payment;
+      return trx;
     });
 
     await logManualAction(
-      req.user!.id,
-      'TRANSAKSI',
-      'CREATE',
-      `Payment-${periode}`,
-      `Debt payment created: ${periode}`,
-      'debt_payments',
-      result.id
+      req.user!.id, 'transaksi', AksiLog.TAMBAH, result.kode,
+      `Pembayaran hutang dicatat: ${hutang.namaKreditur} Rp ${amount}`, result.id
     );
 
     res.json(successResponse(result));

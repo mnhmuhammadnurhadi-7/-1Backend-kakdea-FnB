@@ -15,6 +15,7 @@ import debtRoutes from './routes/debts';
 import reportRoutes from './routes/reports';
 import auditLogRoutes from './routes/auditLog';
 import partnerStoreRoutes from './routes/partnerStores';
+import freeTableRoutes from './routes/freeTables';
 
 dotenv.config();
 
@@ -44,6 +45,7 @@ app.use('/api/v1/debts', debtRoutes);
 app.use('/api/v1/reports', reportRoutes);
 app.use('/api/v1/audit-log', auditLogRoutes);
 app.use('/api/v1/partner-stores', partnerStoreRoutes);
+app.use('/api/v1/free-tables', freeTableRoutes);
 
 // Health check
 app.get('/health', (req, res) => {

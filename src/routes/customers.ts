@@ -3,6 +3,8 @@ import { authenticate, AuthRequest } from '../middleware/auth';
 import { successResponse, errorResponse } from '../utils/response';
 import prisma from '../utils/database';
 import { logManualAction } from '../services/auditLogService';
+import { AksiLog } from '@prisma/client';
+import { KODE_JENIS_BAWAAN } from '../utils/jenisBawaan';
 
 const router = Router();
 
@@ -17,16 +19,16 @@ router.get('/', async (req: AuthRequest, res: Response, next) => {
     if (search) {
       where.OR = [
         { nama: { contains: search as string } },
-        { kodeCustomer: { contains: search as string } },
+        { kode: { contains: search as string } },
       ];
     }
     if (status) {
-      where.status = status;
+      where.status = status as string;
     }
 
-    const customers = await prisma.customer.findMany({
+    const customers = await prisma.dataPelanggan.findMany({
       where,
-      orderBy: { createdAt: 'desc' }
+      orderBy: { dibuatPada: 'desc' }
     });
 
     res.json(successResponse(customers));
@@ -40,16 +42,22 @@ router.get('/:id', async (req: AuthRequest, res: Response, next) => {
   try {
     const id = parseInt(String(req.params.id));
     
-    const customer = await prisma.customer.findUnique({
+    const orderJenis = await prisma.jenisTransaksi.findMany({
+      where: { kode: { in: [KODE_JENIS_BAWAAN.PENDAPATAN_FROZEN, KODE_JENIS_BAWAAN.PENDAPATAN_SIAP_SAJI] } },
+      select: { id: true },
+    });
+    const customer = await prisma.dataPelanggan.findUnique({
       where: { id },
       include: {
-        orders: {
+        transaksi: {
+          where: { jenisTransaksiId: { in: orderJenis.map((j) => j.id) } },
           orderBy: { tanggal: 'desc' },
           take: 1,
           select: {
             id: true,
+            kode: true,
             tanggal: true,
-            totalInvoice: true,
+            nominal: true,
           }
         }
       }
@@ -61,8 +69,8 @@ router.get('/:id', async (req: AuthRequest, res: Response, next) => {
 
     const response = {
       ...customer,
-      order_terakhir: customer.orders[0] || null,
-      orders: undefined,
+      order_terakhir: customer.transaksi[0] || null,
+      transaksi: undefined,
     };
 
     res.json(successResponse(response));
@@ -74,21 +82,36 @@ router.get('/:id', async (req: AuthRequest, res: Response, next) => {
 // POST /customers
 router.post('/', async (req: AuthRequest, res: Response, next) => {
   try {
-    const { kode_customer, nama, status, alamat, contact_person, telp, bank_nama, rekening, keterangan } = req.body;
+    const {
+      kode,
+      kode_customer,
+      nama,
+      status,
+      alamat,
+      kontakPerson,
+      contact_person,
+      telepon,
+      telp,
+      bankNama,
+      bank_nama,
+      rekening,
+      keterangan
+    } = req.body;
     
-    if (!kode_customer || !nama) {
-      throw errorResponse('kode_customer and nama are required');
+    const finalKode = kode || kode_customer;
+    if (!finalKode || !nama) {
+      throw errorResponse('kode (kode_customer) and nama are required');
     }
 
-    const customer = await prisma.customer.create({
+    const customer = await prisma.dataPelanggan.create({
       data: {
-        kodeCustomer: kode_customer,
+        kode: finalKode,
         nama,
         status,
         alamat,
-        contactPerson: contact_person,
-        telp,
-        bankNama: bank_nama,
+        kontakPerson: kontakPerson || contact_person,
+        telepon: telepon || telp,
+        bankNama: bankNama || bank_nama,
         rekening,
         keterangan,
       }
@@ -96,11 +119,10 @@ router.post('/', async (req: AuthRequest, res: Response, next) => {
 
     await logManualAction(
       req.user!.id,
-      'CUSTOMER',
-      'CREATE',
+      'data_pelanggan',
+      AksiLog.TAMBAH,
       customer.nama,
-      `Customer created: ${customer.nama}`,
-      'customers',
+      `Data Pelanggan created: ${customer.nama}`,
       customer.id
     );
 
@@ -114,22 +136,55 @@ router.post('/', async (req: AuthRequest, res: Response, next) => {
 router.put('/:id', async (req: AuthRequest, res: Response, next) => {
   try {
     const id = parseInt(String(req.params.id));
-    const updates = req.body;
+    const {
+      kode,
+      kode_customer,
+      nama,
+      status,
+      alamat,
+      kontakPerson,
+      contact_person,
+      telepon,
+      telp,
+      bankNama,
+      bank_nama,
+      rekening,
+      saldoPiutang,
+      saldo_piutang,
+      keterangan
+    } = req.body;
     
-    const customer = await prisma.customer.update({
+    const existing = await prisma.dataPelanggan.findUnique({ where: { id } });
+    if (!existing) {
+      throw errorResponse('Customer not found', 404);
+    }
+
+    const updateData: any = {};
+    if (kode || kode_customer) updateData.kode = kode || kode_customer;
+    if (nama !== undefined) updateData.nama = nama;
+    if (status !== undefined) updateData.status = status;
+    if (alamat !== undefined) updateData.alamat = alamat;
+    if (kontakPerson !== undefined || contact_person !== undefined) updateData.kontakPerson = kontakPerson || contact_person;
+    if (telepon !== undefined || telp !== undefined) updateData.telepon = telepon || telp;
+    if (bankNama !== undefined || bank_nama !== undefined) updateData.bankNama = bankNama || bank_nama;
+    if (rekening !== undefined) updateData.rekening = rekening;
+    if (saldoPiutang !== undefined || saldo_piutang !== undefined) updateData.saldoPiutang = saldoPiutang ?? saldo_piutang;
+    if (keterangan !== undefined) updateData.keterangan = keterangan;
+
+    const customer = await prisma.dataPelanggan.update({
       where: { id },
-      data: updates
+      data: updateData
     });
 
     await logManualAction(
       req.user!.id,
-      'CUSTOMER',
-      'UPDATE',
+      'data_pelanggan',
+      AksiLog.UBAH,
       customer.nama,
-      `Customer updated: ${customer.nama}`,
-      'customers',
+      `Data Pelanggan updated: ${customer.nama}`,
       customer.id,
-      { field: 'customer', sebelum: '', sesudah: JSON.stringify(updates) }
+      existing,
+      updateData
     );
 
     res.json(successResponse(customer));
@@ -143,17 +198,16 @@ router.delete('/:id', async (req: AuthRequest, res: Response, next) => {
   try {
     const id = parseInt(String(req.params.id));
     
-    const customer = await prisma.customer.delete({
+    const customer = await prisma.dataPelanggan.delete({
       where: { id }
     });
 
     await logManualAction(
       req.user!.id,
-      'CUSTOMER',
-      'DELETE',
+      'data_pelanggan',
+      AksiLog.HAPUS,
       customer.nama,
-      `Customer deleted: ${customer.nama}`,
-      'customers',
+      `Data Pelanggan deleted: ${customer.nama}`,
       customer.id
     );
 

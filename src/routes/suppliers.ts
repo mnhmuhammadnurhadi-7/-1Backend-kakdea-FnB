@@ -3,6 +3,7 @@ import { authenticate, AuthRequest } from '../middleware/auth';
 import { successResponse, errorResponse } from '../utils/response';
 import prisma from '../utils/database';
 import { logManualAction } from '../services/auditLogService';
+import { AksiLog } from '@prisma/client';
 
 const router = Router();
 
@@ -17,13 +18,13 @@ router.get('/', async (req: AuthRequest, res: Response, next) => {
     if (search) {
       where.OR = [
         { nama: { contains: search as string } },
-        { kodeSupplier: { contains: search as string } },
+        { kode: { contains: search as string } },
       ];
     }
 
-    const suppliers = await prisma.supplier.findMany({
+    const suppliers = await prisma.dataPemasok.findMany({
       where,
-      orderBy: { createdAt: 'desc' }
+      orderBy: { dibuatPada: 'desc' }
     });
 
     res.json(successResponse(suppliers));
@@ -35,7 +36,7 @@ router.get('/', async (req: AuthRequest, res: Response, next) => {
 // GET /suppliers/:id
 router.get('/:id', async (req: AuthRequest, res: Response, next) => {
   try {
-    const supplier = await prisma.supplier.findUnique({
+    const supplier = await prisma.dataPemasok.findUnique({
       where: { id: parseInt(String(req.params.id)) }
     });
 
@@ -52,20 +53,34 @@ router.get('/:id', async (req: AuthRequest, res: Response, next) => {
 // POST /suppliers
 router.post('/', async (req: AuthRequest, res: Response, next) => {
   try {
-    const { kode_supplier, nama, alamat, contact_person, telp, bank_nama, rekening, keterangan } = req.body;
+    const {
+      kode,
+      kode_supplier,
+      nama,
+      alamat,
+      kontakPerson,
+      contact_person,
+      telepon,
+      telp,
+      bankNama,
+      bank_nama,
+      rekening,
+      keterangan
+    } = req.body;
     
-    if (!kode_supplier || !nama) {
-      throw errorResponse('kode_supplier and nama are required');
+    const finalKode = kode || kode_supplier;
+    if (!finalKode || !nama) {
+      throw errorResponse('kode (kode_supplier) and nama are required');
     }
 
-    const supplier = await prisma.supplier.create({
+    const supplier = await prisma.dataPemasok.create({
       data: {
-        kodeSupplier: kode_supplier,
+        kode: finalKode,
         nama,
         alamat,
-        contactPerson: contact_person,
-        telp,
-        bankNama: bank_nama,
+        kontakPerson: kontakPerson || contact_person,
+        telepon: telepon || telp,
+        bankNama: bankNama || bank_nama,
         rekening,
         keterangan,
       }
@@ -73,11 +88,10 @@ router.post('/', async (req: AuthRequest, res: Response, next) => {
 
     await logManualAction(
       req.user!.id,
-      'SUPPLIER',
-      'CREATE',
+      'data_pemasok',
+      AksiLog.TAMBAH,
       supplier.nama,
-      `Supplier created: ${supplier.nama}`,
-      'suppliers',
+      `Data Pemasok created: ${supplier.nama}`,
       supplier.id
     );
 
@@ -91,22 +105,53 @@ router.post('/', async (req: AuthRequest, res: Response, next) => {
 router.put('/:id', async (req: AuthRequest, res: Response, next) => {
   try {
     const id = parseInt(String(req.params.id));
-    const updates = req.body;
+    const {
+      kode,
+      kode_supplier,
+      nama,
+      alamat,
+      kontakPerson,
+      contact_person,
+      telepon,
+      telp,
+      bankNama,
+      bank_nama,
+      rekening,
+      saldoHutang,
+      saldo_hutang,
+      keterangan
+    } = req.body;
     
-    const supplier = await prisma.supplier.update({
+    const existing = await prisma.dataPemasok.findUnique({ where: { id } });
+    if (!existing) {
+      throw errorResponse('Supplier not found', 404);
+    }
+
+    const updateData: any = {};
+    if (kode || kode_supplier) updateData.kode = kode || kode_supplier;
+    if (nama !== undefined) updateData.nama = nama;
+    if (alamat !== undefined) updateData.alamat = alamat;
+    if (kontakPerson !== undefined || contact_person !== undefined) updateData.kontakPerson = kontakPerson || contact_person;
+    if (telepon !== undefined || telp !== undefined) updateData.telepon = telepon || telp;
+    if (bankNama !== undefined || bank_nama !== undefined) updateData.bankNama = bankNama || bank_nama;
+    if (rekening !== undefined) updateData.rekening = rekening;
+    if (saldoHutang !== undefined || saldo_hutang !== undefined) updateData.saldoHutang = saldoHutang ?? saldo_hutang;
+    if (keterangan !== undefined) updateData.keterangan = keterangan;
+
+    const supplier = await prisma.dataPemasok.update({
       where: { id },
-      data: updates
+      data: updateData
     });
 
     await logManualAction(
       req.user!.id,
-      'SUPPLIER',
-      'UPDATE',
+      'data_pemasok',
+      AksiLog.UBAH,
       supplier.nama,
-      `Supplier updated: ${supplier.nama}`,
-      'suppliers',
+      `Data Pemasok updated: ${supplier.nama}`,
       supplier.id,
-      { field: 'supplier', sebelum: '', sesudah: JSON.stringify(updates) }
+      existing,
+      updateData
     );
 
     res.json(successResponse(supplier));
@@ -120,17 +165,16 @@ router.delete('/:id', async (req: AuthRequest, res: Response, next) => {
   try {
     const id = parseInt(String(req.params.id));
     
-    const supplier = await prisma.supplier.delete({
+    const supplier = await prisma.dataPemasok.delete({
       where: { id }
     });
 
     await logManualAction(
       req.user!.id,
-      'SUPPLIER',
-      'DELETE',
+      'data_pemasok',
+      AksiLog.HAPUS,
       supplier.nama,
-      `Supplier deleted: ${supplier.nama}`,
-      'suppliers',
+      `Data Pemasok deleted: ${supplier.nama}`,
       supplier.id
     );
 
