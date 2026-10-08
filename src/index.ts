@@ -4,17 +4,11 @@ import dotenv from 'dotenv';
 import authRoutes from './routes/auth';
 import dashboardRoutes from './routes/dashboard';
 import productRoutes from './routes/products';
-import customerRoutes from './routes/customers';
-import supplierRoutes from './routes/suppliers';
-import accountRoutes from './routes/accounts';
 import transactionTypeRoutes from './routes/transactionTypes';
 import transactionRoutes from './routes/transactions';
-import stockRoutes from './routes/stock';
 import orderRoutes from './routes/orders';
-import debtRoutes from './routes/debts';
 import reportRoutes from './routes/reports';
 import auditLogRoutes from './routes/auditLog';
-import partnerStoreRoutes from './routes/partnerStores';
 import freeTableRoutes from './routes/freeTables';
 
 dotenv.config();
@@ -34,18 +28,22 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/dashboard', dashboardRoutes);
 app.use('/api/v1/products', productRoutes);
-app.use('/api/v1/customers', customerRoutes);
-app.use('/api/v1/suppliers', supplierRoutes);
-app.use('/api/v1/accounts', accountRoutes);
 app.use('/api/v1/transaction-types', transactionTypeRoutes);
 app.use('/api/v1/transactions', transactionRoutes);
-app.use('/api/v1/stock', stockRoutes);
 app.use('/api/v1/orders', orderRoutes);
-app.use('/api/v1/debts', debtRoutes);
 app.use('/api/v1/reports', reportRoutes);
 app.use('/api/v1/audit-log', auditLogRoutes);
-app.use('/api/v1/partner-stores', partnerStoreRoutes);
 app.use('/api/v1/free-tables', freeTableRoutes);
+
+// Root info endpoint
+app.get('/', (req, res) => {
+  res.json({
+    status: 'ok',
+    message: 'Buku Dapur Backend API Server Running',
+    version: '1.0.0',
+    webUI: 'http://localhost:3000'
+  });
+});
 
 // Health check
 app.get('/health', (req, res) => {

@@ -9,9 +9,7 @@ const router = Router();
 
 router.use(authenticate);
 
-// Generate kode transaksi yang atomic & aman untuk concurrent request:
-// pakai MAX(id) dalam prefix kode jenis, bukan count() (yang bisa
-// collide kalau ada row yang sudah dihapus).
+// Generate kode transaksi yang atomic & aman untuk concurrent request
 async function generateKodeTransaksi(tx: any, prefixKode: string): Promise<string> {
   const rows: Array<{ maxNum: number | null }> = await tx.$queryRaw`
     SELECT MAX(CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(kode, '-', 1), ${prefixKode}, -1) AS UNSIGNED)) as maxNum
@@ -26,30 +24,18 @@ interface CreateEntriParams {
   jenisTransaksiId: number;
   tanggal: Date;
   unitBisnis?: string | null;
-  detail?: string | null; // Keterangan
+  detail?: string | null;
   jenisKas?: string | null;
   nominal: number;
-  debit?: string | null; // teks bebas, opsional
-  kredit?: string | null; // teks bebas, opsional
+  debit?: string | null;
+  kredit?: string | null;
   customData?: Record<string, any> | null;
-  pemasokId?: number | null;
-  hutangId?: number | null;
-  pelangganId?: number | null;
-  produkId?: number | null;
-  jumlah?: number | null;
-  hargaSatuan?: number | null;
-  jumlahBayar?: number | null;
-  sisaPiutang?: number | null;
-  sumberOrder?: string | null;
   sumberInput?: SumberInput;
   dibuatOleh: number;
 }
 
 /**
- * Pembuat entri transaksi generik - dipakai oleh endpoint POST / di file
- * ini, DAN oleh orders.ts / debts.ts. Sejak revisi 29 Sep 2026: TIDAK
- * ADA lagi validasi akun/jurnal - Debit/Kredit murni teks bebas yang
- * diketik user (boleh kosong), Neraca otomatis di luar scope.
+ * Pembuat entri transaksi generik - dipakai oleh endpoint POST / di file ini.
  */
 export async function createEntriTransaksi(params: CreateEntriParams) {
   const jenisTrx = await prisma.jenisTransaksi.findUnique({ where: { id: params.jenisTransaksiId } });
@@ -73,39 +59,19 @@ export async function createEntriTransaksi(params: CreateEntriParams) {
         debit: params.debit || null,
         kredit: params.kredit || null,
         customData: params.customData || undefined,
-        pemasokId: params.pemasokId || null,
-        hutangId: params.hutangId || null,
-        pelangganId: params.pelangganId || null,
-        produkId: params.produkId || null,
-        jumlah: params.jumlah ?? null,
-        hargaSatuan: params.hargaSatuan ?? null,
-        jumlahBayar: params.jumlahBayar ?? null,
-        sisaPiutang: params.sisaPiutang ?? null,
-        sumberOrder: params.sumberOrder || null,
         sumberInput: params.sumberInput || SumberInput.MANUAL,
         dibuatOleh: params.dibuatOleh,
       },
     });
 
-    // Update saldo hutang pemasok kalau entri ini terkait pemasok (cek
-    // ada-tidaknya pemasokId, tidak lagi terikat enum tipe apapun).
-    if (params.pemasokId) {
-      await tx.dataPemasok.update({
-        where: { id: params.pemasokId },
-        data: { saldoHutang: { increment: params.nominal } },
-      });
-    }
-
     return entri;
   });
 }
 
-// GET /transactions  -- tanpa filter jenis_transaksi_id = feed gabungan
-// SEMUA entri lintas jenis, ini yang dipakai tab "Master Transaksi" di
-// webf (kolom default saja: tanggal, keterangan, jenis, nominal).
+// GET /transactions
 router.get('/', async (req: AuthRequest, res: Response, next) => {
   try {
-    const { business_unit, unit_bisnis, jenis_transaksi_id, transaction_type_id, tanggal_mulai, tanggal_selesai, search } = req.query;
+    const { business_unit, unit_bisnis, jenis_transaksi_id, transaction_type_id, tanggal_mulai, tanggal_selesai, search, page = '1', limit = '50' } = req.query;
 
     const where: any = {};
     const finalUnit = unit_bisnis || business_unit;
@@ -125,19 +91,30 @@ router.get('/', async (req: AuthRequest, res: Response, next) => {
       ];
     }
 
-    const transactions = await prisma.transaksi.findMany({
-      where,
-      include: {
-        jenisTransaksi: { include: { kolomCustom: { where: { aktif: true } } } },
-        pemasok: true,
-        pelanggan: true,
-        produk: true,
-        hutang: true,
-      },
-      orderBy: { tanggal: 'desc' },
-    });
+    const skip = (Number(page) - 1) * Number(limit);
 
-    res.json(successResponse(transactions));
+    const [transactions, total] = await Promise.all([
+      prisma.transaksi.findMany({
+        where,
+        include: {
+          jenisTransaksi: { include: { kolomCustom: { where: { aktif: true } } } },
+        },
+        orderBy: { tanggal: 'desc' },
+        skip,
+        take: Number(limit),
+      }),
+      prisma.transaksi.count({ where }),
+    ]);
+
+    res.json(successResponse({
+      data: transactions,
+      pagination: {
+        page: Number(page),
+        limit: Number(limit),
+        total,
+        totalPages: Math.ceil(total / Number(limit)),
+      },
+    }));
   } catch (error) {
     next(error);
   }
@@ -151,10 +128,6 @@ router.get('/:id', async (req: AuthRequest, res: Response, next) => {
       where: { id },
       include: {
         jenisTransaksi: { include: { kolomCustom: { where: { aktif: true } } } },
-        pemasok: true,
-        pelanggan: true,
-        produk: true,
-        hutang: true,
       },
     });
     if (!trx) throw errorResponse('Transaksi tidak ditemukan', 404);
@@ -164,8 +137,7 @@ router.get('/:id', async (req: AuthRequest, res: Response, next) => {
   }
 });
 
-// POST /transactions  -- endpoint generic utama, dipakai form "Tambah
-// Transaksi" di webf. Debit/Kredit opsional (teks bebas).
+// POST /transactions
 router.post('/', async (req: AuthRequest, res: Response, next) => {
   try {
     const {
@@ -183,21 +155,6 @@ router.post('/', async (req: AuthRequest, res: Response, next) => {
       kredit,
       custom_data,
       customData,
-      pemasok_id,
-      pemasokId,
-      pelanggan_id,
-      pelangganId,
-      produk_id,
-      produkId,
-      hutang_id,
-      hutangId,
-      jumlah,
-      harga_satuan,
-      hargaSatuan,
-      jumlah_bayar,
-      jumlahBayar,
-      sumber_order,
-      sumberOrder,
       sumber_input,
       sumberInput,
     } = req.body;
@@ -218,14 +175,6 @@ router.post('/', async (req: AuthRequest, res: Response, next) => {
       debit: debit || null,
       kredit: kredit || null,
       customData: customData || custom_data,
-      pemasokId: (pemasokId ?? pemasok_id) ? parseInt(String(pemasokId ?? pemasok_id)) : null,
-      hutangId: (hutangId ?? hutang_id) ? parseInt(String(hutangId ?? hutang_id)) : null,
-      pelangganId: (pelangganId ?? pelanggan_id) ? parseInt(String(pelangganId ?? pelanggan_id)) : null,
-      produkId: (produkId ?? produk_id) ? parseInt(String(produkId ?? produk_id)) : null,
-      jumlah: jumlah ? parseInt(String(jumlah)) : null,
-      hargaSatuan: (hargaSatuan ?? harga_satuan) ? Number(hargaSatuan ?? harga_satuan) : null,
-      jumlahBayar: (jumlahBayar ?? jumlah_bayar) !== undefined ? Number(jumlahBayar ?? jumlah_bayar) : null,
-      sumberOrder: sumberOrder || sumber_order,
       sumberInput: (sumberInput || sumber_input) === 'AI' ? SumberInput.AI : SumberInput.MANUAL,
       dibuatOleh: req.user!.id,
     });
@@ -247,7 +196,7 @@ router.post('/', async (req: AuthRequest, res: Response, next) => {
   }
 });
 
-// PUT /transactions/:id  -- edit satu baris entri
+// PUT /transactions/:id
 router.put('/:id', async (req: AuthRequest, res: Response, next) => {
   try {
     const id = parseInt(String(req.params.id));
@@ -287,22 +236,7 @@ router.delete('/:id', async (req: AuthRequest, res: Response, next) => {
     const trx = await prisma.transaksi.findUnique({ where: { id } });
     if (!trx) throw errorResponse('Transaksi tidak ditemukan', 404);
 
-    await prisma.$transaction(async (tx) => {
-      await tx.transaksi.delete({ where: { id } });
-
-      if (trx.hutangId) {
-        await tx.hutang.update({
-          where: { id: trx.hutangId },
-          data: { sisaHutang: { increment: trx.nominal } },
-        });
-      }
-      if (trx.pemasokId) {
-        await tx.dataPemasok.update({
-          where: { id: trx.pemasokId },
-          data: { saldoHutang: { decrement: trx.nominal } },
-        });
-      }
-    });
+    await prisma.transaksi.delete({ where: { id } });
 
     await logManualAction(
       req.user!.id, 'transaksi', AksiLog.HAPUS, trx.kode,

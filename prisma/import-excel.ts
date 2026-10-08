@@ -1,9 +1,9 @@
 // ============================================================
 // DEPRECATED sejak revisi arsitektur 27 Sep 2026: bulk Excel import
 // sudah tidak dipakai lagi - semua data transaksi mulai kosong, diisi
-// user lewat GUI CRUD. File ini juga sudah tidak kompatibel dengan
-// schema.prisma yang baru (TipeTransaksi enum sudah dihapus, diganti
-// JenisTransaksi dinamis). Dibiarkan ada untuk referensi histori Chart
+// user lewat GUI CRUD. File ini juga telah disesuaikan dengan
+// schema.prisma yang baru (TipeTransaksi enum & JurnalEntri dihapus,
+// diganti JenisTransaksi dinamis). Dibiarkan ada untuk referensi histori Chart
 // of Accounts saja (sudah dipindah ke prisma/seed.ts) - JANGAN dijalankan.
 // ============================================================
 throw new Error(
@@ -11,7 +11,7 @@ throw new Error(
   '27 Sep 2026. Chart of Accounts sudah ada di prisma/seed.ts (jalankan `npm run prisma:seed`).'
 );
 
-import { PrismaClient, TipeTransaksi, SumberInput } from '@prisma/client';
+import { PrismaClient, ArahTransaksi, SumberInput } from '@prisma/client';
 import * as XLSX from 'xlsx';
 import path from 'path';
 import bcrypt from 'bcrypt';
@@ -144,9 +144,7 @@ async function main() {
 
   // 1. Clean existing data in dependency order
   console.log('\n--- Cleaning existing database tables...');
-  await prisma.jurnalEntriBaris.deleteMany({});
   await prisma.transaksi.deleteMany({});
-  await prisma.jurnalEntri.deleteMany({});
   await prisma.logAudit.deleteMany({});
   await prisma.hutang.deleteMany({});
   await prisma.produk.deleteMany({});
@@ -194,17 +192,16 @@ async function main() {
   const wsMasterTrx = wb.Sheets['MASTER TRANSAKSI'];
   const masterTrxRows: any[][] = XLSX.utils.sheet_to_json(wsMasterTrx, { header: 1, defval: null });
 
-  const tipeMapping: Record<string, { tipe: TipeTransaksi; prefix: string }> = {
-    'DATA ORDER': { tipe: TipeTransaksi.DATA_ORDER, prefix: 'JO' },
-    'CASH IN': { tipe: TipeTransaksi.CASH_IN, prefix: 'CS' },
-    'BIAYA LANGSUNG': { tipe: TipeTransaksi.BIAYA_LANGSUNG, prefix: 'BL' },
-    'BIAYA TAK LANGSUNG': { tipe: TipeTransaksi.BIAYA_TAK_LANGSUNG, prefix: 'BP' },
-    'MUTASI': { tipe: TipeTransaksi.MUTASI, prefix: 'MT' },
-    'PENYUSUTAN': { tipe: TipeTransaksi.PENYUSUTAN, prefix: 'PY' },
+  const tipeMapping: Record<string, { arah: ArahTransaksi }> = {
+    'DATA ORDER': { arah: ArahTransaksi.PEMASUKAN },
+    'CASH IN': { arah: ArahTransaksi.PEMASUKAN },
+    'BIAYA LANGSUNG': { arah: ArahTransaksi.PENGELUARAN },
+    'BIAYA TAK LANGSUNG': { arah: ArahTransaksi.PENGELUARAN },
+    'MUTASI': { arah: ArahTransaksi.PENGELUARAN },
+    'PENYUSUTAN': { arah: ArahTransaksi.PENGELUARAN },
   };
 
   let countJenisTransaksi = 0;
-  // Row index 3 is header (0-indexed: 2), data starts at row index 4 (0-indexed: 3)
   for (let i = 3; i < masterTrxRows.length; i++) {
     const row = masterTrxRows[i];
     if (!row || row[0] === null || !row[1] || !row[2]) continue;
@@ -219,35 +216,12 @@ async function main() {
       continue;
     }
 
-    // Resolve Debit & Kredit codes
-    let akunDebitKode: string | null = row[6] ? String(row[6]).trim() : null;
-    let akunKreditKode: string | null = row[7] ? String(row[7]).trim() : null;
-
-    if (!akunDebitKode && row[3]) {
-      akunDebitKode = resolveAkunKode(String(row[3]));
-    }
-    if (!akunKreditKode && row[4]) {
-      akunKreditKode = resolveAkunKode(String(row[4]));
-    }
-
-    // Verify against JenisAkun
-    if (akunDebitKode && !masterAccounts.some(a => a.kodeAkun === akunDebitKode)) {
-      warnings.push(`MASTER TRANSAKSI row ${i + 1} (${namaTrx}): debit code ${akunDebitKode} not in JenisAkun`);
-      akunDebitKode = null;
-    }
-    if (akunKreditKode && !masterAccounts.some(a => a.kodeAkun === akunKreditKode)) {
-      warnings.push(`MASTER TRANSAKSI row ${i + 1} (${namaTrx}): kredit code ${akunKreditKode} not in JenisAkun`);
-      akunKreditKode = null;
-    }
-
     await prisma.jenisTransaksi.create({
       data: {
         kode: rawKode,
-        tipe: mapping.tipe,
         namaTransaksi: namaTrx,
-        prefixKode: mapping.prefix,
-        akunDebitKode,
-        akunKreditKode,
+        arah: mapping.arah,
+        jenisAkun: row[3] ? String(row[3]).trim() : null,
         aktif: true,
       },
     });
@@ -256,17 +230,16 @@ async function main() {
 
   // Also ensure JenisTransaksi for Hutang Repayment exists
   const existingHutangTrx = await prisma.jenisTransaksi.findFirst({
-    where: { tipe: TipeTransaksi.MUTASI, namaTransaksi: 'Pembayaran Cicilan Hutang' },
+    where: { namaTransaksi: 'Pembayaran Cicilan Hutang' },
   });
   if (!existingHutangTrx) {
     await prisma.jenisTransaksi.create({
       data: {
         kode: 'MT-HTG',
-        tipe: TipeTransaksi.MUTASI,
         namaTransaksi: 'Pembayaran Cicilan Hutang',
-        prefixKode: 'MT',
-        akunDebitKode: '21100', // Hutang Usaha
-        akunKreditKode: '11100', // Kas Utama
+        arah: ArahTransaksi.PENGELUARAN,
+        jenisAkun: 'Hutang Usaha',
+        isBawaan: true,
         aktif: true,
       },
     });
@@ -280,10 +253,9 @@ async function main() {
   const supplierRows: any[][] = XLSX.utils.sheet_to_json(wsSupplier, { header: 1, defval: null });
   let countPemasok = 0;
 
-  // Header is row 3 (0-indexed 2), data starts row 4 (0-indexed 3)
   for (let i = 3; i < supplierRows.length; i++) {
     const row = supplierRows[i];
-    if (!row || !row[1] || !row[2]) continue; // needs KODE and SUPPLIER
+    if (!row || !row[1] || !row[2]) continue;
 
     const kode = String(row[1]).trim();
     const nama = String(row[2]).trim();
@@ -320,7 +292,7 @@ async function main() {
 
   for (let i = 3; i < customerRows.length; i++) {
     const row = customerRows[i];
-    if (!row || !row[0] || !row[1]) continue; // needs KODE and CUSTOMER
+    if (!row || !row[0] || !row[1]) continue;
 
     const kode = String(row[0]).trim();
     const nama = String(row[1]).trim();
@@ -380,7 +352,7 @@ async function main() {
   // Fetch all JenisTransaksi for reference lookup
   const allJenisTransaksi = await prisma.jenisTransaksi.findMany();
 
-  // 8. Sheet "SP - BIAYA TAK LANGSUNG" -> Transaksi + JurnalEntri
+  // 8. Sheet "SP - BIAYA TAK LANGSUNG" -> Transaksi
   console.log('\n--- Importing Sheet: SP - BIAYA TAK LANGSUNG -> Transaksi...');
   const wsIndirect = wb.Sheets['SP - BIAYA TAK LANGSUNG'];
   const indirectRows: any[][] = XLSX.utils.sheet_to_json(wsIndirect, { header: 1, defval: null });
@@ -399,62 +371,30 @@ async function main() {
     const debitName = row[6] ? String(row[6]).trim() : null;
     const kreditName = row[7] ? String(row[7]).trim() : null;
 
-    // Match JenisTransaksi
     const matchJenisTrx = allJenisTransaksi.find(
-      jt => jt.tipe === TipeTransaksi.BIAYA_TAK_LANGSUNG && normalize(jt.namaTransaksi) === normalize(namaTrx)
+      jt => jt.arah === ArahTransaksi.PENGELUARAN && normalize(jt.namaTransaksi) === normalize(namaTrx)
     ) || allJenisTransaksi.find(
-      jt => jt.tipe === TipeTransaksi.BIAYA_TAK_LANGSUNG && normalize(namaTrx).includes(normalize(jt.namaTransaksi))
+      jt => jt.arah === ArahTransaksi.PENGELUARAN && normalize(namaTrx).includes(normalize(jt.namaTransaksi))
     );
 
     if (!matchJenisTrx) {
       warnings.push(`BIAYA TAK LANGSUNG row ${i + 1} (${kode}): No matching JenisTransaksi for "${namaTrx}"`);
     }
 
-    const jenisTrxId = matchJenisTrx ? matchJenisTrx.id : allJenisTransaksi.find(jt => jt.tipe === TipeTransaksi.BIAYA_TAK_LANGSUNG)!.id;
+    const jenisTrxId = matchJenisTrx ? matchJenisTrx.id : allJenisTransaksi.find(jt => jt.arah === ArahTransaksi.PENGELUARAN)!.id;
 
-    // Resolve Account Codes
-    let akunDebitKode = resolveAkunKode(debitName) || matchJenisTrx?.akunDebitKode || null;
-    let akunKreditKode = resolveAkunKode(kreditName) || '11100'; // Default Kas Utama
-
-    if (!akunDebitKode) {
-      warnings.push(`BIAYA TAK LANGSUNG row ${i + 1} (${kode}): Failed to resolve DEBIT account for "${debitName}"`);
-    }
-    if (!akunKreditKode) {
-      warnings.push(`BIAYA TAK LANGSUNG row ${i + 1} (${kode}): Failed to resolve KREDIT account for "${kreditName}"`);
-    }
-
-    // Auto-generate JurnalEntri + JurnalEntriBaris
-    const jurnal = await prisma.jurnalEntri.create({
-      data: {
-        tanggal,
-        deskripsi: `${namaTrx} - ${detail || ''}`.trim(),
-        unitBisnis: 'PABRIK',
-        dibuatOleh: adminUser.id,
-        viaAi: false,
-        baris: {
-          create: [
-            ...(akunDebitKode ? [{ akunKode: akunDebitKode, debit: nominal, kredit: 0 }] : []),
-            ...(akunKreditKode ? [{ akunKode: akunKreditKode, debit: 0, kredit: nominal }] : []),
-          ],
-        },
-      },
-    });
-
-    // Create Transaksi
     await prisma.transaksi.create({
       data: {
         kode,
         tanggal,
         unitBisnis: 'PABRIK',
         jenisTransaksiId: jenisTrxId,
-        tipe: TipeTransaksi.BIAYA_TAK_LANGSUNG,
         namaTransaksi: namaTrx,
         detail,
         jenisKas,
         nominal,
-        akunDebitKode,
-        akunKreditKode,
-        jurnalEntriId: jurnal.id,
+        debit: debitName,
+        kredit: kreditName,
         sumberInput: SumberInput.MANUAL,
         dibuatOleh: adminUser.id,
       },
@@ -463,7 +403,7 @@ async function main() {
   }
   console.log(`✓ ${countRealIndirect} real BIAYA_TAK_LANGSUNG Transaksi records imported.`);
 
-  // 9. Sheet "CASH IN" -> Transaksi + JurnalEntri
+  // 9. Sheet "CASH IN" -> Transaksi
   console.log('\n--- Importing Sheet: CASH IN -> Transaksi...');
   const wsCashIn = wb.Sheets['CASH IN'];
   const cashInRows: any[][] = XLSX.utils.sheet_to_json(wsCashIn, { header: 1, defval: null });
@@ -482,39 +422,19 @@ async function main() {
     const debitName = row[6] ? String(row[6]).trim() : null;
     const kreditName = row[7] ? String(row[7]).trim() : null;
 
-    // Use first line of rawNamaTrx for matching
     const cleanNamaTrx = rawNamaTrx.split(/[\r\n]+/)[0].trim();
 
     const matchJenisTrx = allJenisTransaksi.find(
-      jt => jt.tipe === TipeTransaksi.CASH_IN && normalize(jt.namaTransaksi) === normalize(cleanNamaTrx)
+      jt => jt.arah === ArahTransaksi.PEMASUKAN && normalize(jt.namaTransaksi) === normalize(cleanNamaTrx)
     ) || allJenisTransaksi.find(
-      jt => jt.tipe === TipeTransaksi.CASH_IN && normalize(cleanNamaTrx).includes(normalize(jt.namaTransaksi))
+      jt => jt.arah === ArahTransaksi.PEMASUKAN && normalize(cleanNamaTrx).includes(normalize(jt.namaTransaksi))
     );
 
     if (!matchJenisTrx) {
       warnings.push(`CASH IN row ${i + 1} (${kode}): No matching JenisTransaksi for "${cleanNamaTrx}"`);
     }
 
-    const jenisTrxId = matchJenisTrx ? matchJenisTrx.id : allJenisTransaksi.find(jt => jt.tipe === TipeTransaksi.CASH_IN)!.id;
-
-    let akunDebitKode = resolveAkunKode(debitName) || '11100'; // Kas Utama
-    let akunKreditKode = resolveAkunKode(kreditName) || '21100'; // Hutang Usaha
-
-    const jurnal = await prisma.jurnalEntri.create({
-      data: {
-        tanggal,
-        deskripsi: `${cleanNamaTrx} - ${detail || ''}`.trim(),
-        unitBisnis: 'NEXT_LEVEL',
-        dibuatOleh: adminUser.id,
-        viaAi: false,
-        baris: {
-          create: [
-            ...(akunDebitKode ? [{ akunKode: akunDebitKode, debit: nominal, kredit: 0 }] : []),
-            ...(akunKreditKode ? [{ akunKode: akunKreditKode, debit: 0, kredit: nominal }] : []),
-          ],
-        },
-      },
-    });
+    const jenisTrxId = matchJenisTrx ? matchJenisTrx.id : allJenisTransaksi.find(jt => jt.arah === ArahTransaksi.PEMASUKAN)!.id;
 
     await prisma.transaksi.create({
       data: {
@@ -522,14 +442,12 @@ async function main() {
         tanggal,
         unitBisnis: 'NEXT_LEVEL',
         jenisTransaksiId: jenisTrxId,
-        tipe: TipeTransaksi.CASH_IN,
         namaTransaksi: cleanNamaTrx,
         detail,
         jenisKas,
         nominal,
-        akunDebitKode,
-        akunKreditKode,
-        jurnalEntriId: jurnal.id,
+        debit: debitName || 'Kas Utama',
+        kredit: kreditName || 'Hutang Usaha',
         sumberInput: SumberInput.MANUAL,
         dibuatOleh: adminUser.id,
       },
@@ -538,14 +456,13 @@ async function main() {
   }
   console.log(`✓ ${countRealCashIn} real CASH_IN Transaksi records imported.`);
 
-  // 10. Sheet "HUTANG PLANNING 2" -> Hutang + Transaksi repayments
+  // 10. Sheet "HUTANG PLANNING 2" -> Hutang & Repayment Transaksi
   console.log('\n--- Importing Sheet: HUTANG PLANNING 2 -> Hutang & Repayment Transaksi...');
   const wsHutang = wb.Sheets['HUTANG PLANNING 2'];
   const hutangRows: any[][] = XLSX.utils.sheet_to_json(wsHutang, { header: 1, defval: null });
   const monthHeaders: { colIndex: number; header: string; date: Date }[] = [];
 
-  // Month columns start from column index 4 ("MAR 24") up to column 16 ("MAR 25")
-  const headerRow = hutangRows[2]; // row index 2 is row 3
+  const headerRow = hutangRows[2];
   for (let c = 4; c < headerRow.length; c++) {
     if (headerRow[c]) {
       const hStr = String(headerRow[c]).trim();
@@ -558,8 +475,8 @@ async function main() {
   }
 
   const hutangJenisTrx = allJenisTransaksi.find(
-    jt => jt.tipe === TipeTransaksi.MUTASI && jt.namaTransaksi === 'Pembayaran Cicilan Hutang'
-  ) || allJenisTransaksi.find(jt => jt.tipe === TipeTransaksi.MUTASI)!;
+    jt => jt.namaTransaksi === 'Pembayaran Cicilan Hutang'
+  ) || allJenisTransaksi.find(jt => jt.arah === ArahTransaksi.PENGELUARAN)!;
 
   let countHutang = 0;
   let countRepaymentTrx = 0;
@@ -578,35 +495,18 @@ async function main() {
         namaKreditur,
         jaminan,
         jumlahPinjaman,
-        sisaHutang: jumlahPinjaman, // Initial before repayments
+        sisaHutang: jumlahPinjaman,
       },
     });
     countHutang++;
 
     let totalDibayar = 0;
 
-    // Check each month column for repayment
     for (const m of monthHeaders) {
       const amount = Number(row[m.colIndex]) || 0;
       if (amount > 0) {
         totalDibayar += amount;
         const trxKode = `MT-H${hutangRecord.id}-${m.header.replace(/\s+/g, '')}`;
-
-        const jurnal = await prisma.jurnalEntri.create({
-          data: {
-            tanggal: m.date,
-            deskripsi: `Pembayaran Cicilan Hutang ${namaKreditur} - ${m.header}`,
-            unitBisnis: 'PABRIK',
-            dibuatOleh: adminUser.id,
-            viaAi: false,
-            baris: {
-              create: [
-                { akunKode: '21100', debit: amount, kredit: 0 }, // Hutang Usaha berkurang (Debit)
-                { akunKode: '11100', debit: 0, kredit: amount }, // Kas berkurang (Kredit)
-              ],
-            },
-          },
-        });
 
         await prisma.transaksi.create({
           data: {
@@ -614,15 +514,13 @@ async function main() {
             tanggal: m.date,
             unitBisnis: 'PABRIK',
             jenisTransaksiId: hutangJenisTrx.id,
-            tipe: TipeTransaksi.MUTASI,
             namaTransaksi: 'Pembayaran Cicilan Hutang',
             detail: `Pembayaran cicilan hutang ${namaKreditur} periode ${m.header}`,
             jenisKas: 'Kas Utama',
             nominal: amount,
-            akunDebitKode: '21100',
-            akunKreditKode: '11100',
+            debit: 'Hutang Usaha',
+            kredit: 'Kas Utama',
             hutangId: hutangRecord.id,
-            jurnalEntriId: jurnal.id,
             sumberInput: SumberInput.MANUAL,
             dibuatOleh: adminUser.id,
           },
@@ -646,7 +544,7 @@ async function main() {
   }
   console.log(`✓ ${countHutang} Hutang records created with ${countRepaymentTrx} repayment transactions.`);
 
-  // 11. STEP 3 — Generate Clearly Marked DUMMY DATA for gaps (DATA_ORDER & BIAYA_LANGSUNG)
+  // 11. STEP 3 — Generate Clearly Marked DUMMY DATA for gaps
   console.log('\n--- Generating Clearly Marked DUMMY DATA for DATA_ORDER & BIAYA_LANGSUNG...');
 
   const pelangganList = await prisma.dataPelanggan.findMany();
@@ -656,7 +554,7 @@ async function main() {
   const dummyRowIds: { kode: string; tipe: string; nominal: number; detail: string }[] = [];
 
   // 11.a Dummy DATA_ORDER (12 rows)
-  const dataOrderJenis = allJenisTransaksi.filter(jt => jt.tipe === TipeTransaksi.DATA_ORDER);
+  const dataOrderJenis = allJenisTransaksi.filter(jt => jt.arah === ArahTransaksi.PEMASUKAN);
   const dummyOrderConfigs = [
     { customerIdx: 1, productIdx: 0, qty: 10, unitPrice: 45000, day: 6, month: 0, jenisIdx: 0, orderSrc: 'WA' },
     { customerIdx: 2, productIdx: 1, qty: 15, unitPrice: 35000, day: 8, month: 0, jenisIdx: 0, orderSrc: 'WA' },
@@ -683,38 +581,18 @@ async function main() {
     const kode = `JO-DUMMY-${String(idx + 1).padStart(2, '0')}`;
     const detail = `[DATA DUMMY] Pesanan ${product.namaBarang} x${cfg.qty} untuk ${customer.nama}`;
 
-    const akunDebit = '11100'; // Kas Utama
-    const akunKredit = jenisTrx.akunKreditKode || '41000'; // Pendapatan FROZEN
-
-    const jurnal = await prisma.jurnalEntri.create({
-      data: {
-        tanggal,
-        deskripsi: detail,
-        unitBisnis: 'DISTRIBUTOR',
-        dibuatOleh: adminUser.id,
-        viaAi: false,
-        baris: {
-          create: [
-            { akunKode: akunDebit, debit: totalAmount, kredit: 0 },
-            { akunKode: akunKredit, debit: 0, kredit: totalAmount },
-          ],
-        },
-      },
-    });
-
     const trx = await prisma.transaksi.create({
       data: {
         kode,
         tanggal,
         unitBisnis: 'DISTRIBUTOR',
         jenisTransaksiId: jenisTrx.id,
-        tipe: TipeTransaksi.DATA_ORDER,
         namaTransaksi: jenisTrx.namaTransaksi,
         detail,
         jenisKas: 'Kas Utama',
         nominal: totalAmount,
-        akunDebitKode: akunDebit,
-        akunKreditKode: akunKredit,
+        debit: 'Kas Utama',
+        kredit: 'Pendapatan FROZEN',
         pelangganId: customer.id,
         produkId: product.id,
         jumlah: cfg.qty,
@@ -722,7 +600,6 @@ async function main() {
         jumlahBayar: totalAmount,
         sisaPiutang: 0,
         sumberOrder: cfg.orderSrc,
-        jurnalEntriId: jurnal.id,
         sumberInput: SumberInput.MANUAL,
         dibuatOleh: adminUser.id,
       },
@@ -734,7 +611,7 @@ async function main() {
   console.log(`✓ ${dummyOrderCount} dummy DATA_ORDER rows generated.`);
 
   // 11.b Dummy BIAYA_LANGSUNG (9 rows)
-  const biayaLangsungJenis = allJenisTransaksi.filter(jt => jt.tipe === TipeTransaksi.BIAYA_LANGSUNG);
+  const biayaLangsungJenis = allJenisTransaksi.filter(jt => jt.arah === ArahTransaksi.PENGELUARAN);
   const dummyDirectConfigs = [
     { supplierIdx: 0, nominal: 750000, day: 5, month: 0, jenisIdx: 2, note: 'Pembelian casing box & bumbu sosis' },
     { supplierIdx: 1, nominal: 320000, day: 9, month: 0, jenisIdx: 2, note: 'Pembelian kentang & kembang tahu' },
@@ -756,40 +633,19 @@ async function main() {
     const kode = `BL-DUMMY-${String(idx + 1).padStart(2, '0')}`;
     const detail = `[DATA DUMMY] ${cfg.note} (${supplier.nama})`;
 
-    const akunDebit = jenisTrx.akunDebitKode || '51100'; // Biaya Bahan
-    const akunKredit = '11100'; // Kas Utama
-
-    const jurnal = await prisma.jurnalEntri.create({
-      data: {
-        tanggal,
-        deskripsi: detail,
-        unitBisnis: 'PABRIK',
-        dibuatOleh: adminUser.id,
-        viaAi: false,
-        baris: {
-          create: [
-            { akunKode: akunDebit, debit: cfg.nominal, kredit: 0 },
-            { akunKode: akunKredit, debit: 0, kredit: cfg.nominal },
-          ],
-        },
-      },
-    });
-
     const trx = await prisma.transaksi.create({
       data: {
         kode,
         tanggal,
         unitBisnis: 'PABRIK',
         jenisTransaksiId: jenisTrx.id,
-        tipe: TipeTransaksi.BIAYA_LANGSUNG,
         namaTransaksi: jenisTrx.namaTransaksi,
         detail,
         jenisKas: 'Kas Utama',
         nominal: cfg.nominal,
-        akunDebitKode: akunDebit,
-        akunKreditKode: akunKredit,
+        debit: 'Biaya Bahan',
+        kredit: 'Kas Utama',
         pemasokId: supplier.id,
-        jurnalEntriId: jurnal.id,
         sumberInput: SumberInput.MANUAL,
         dibuatOleh: adminUser.id,
       },
@@ -820,7 +676,6 @@ async function main() {
   console.log(`    • Real Cicilan HUTANG     : ${countRepaymentTrx}`);
   console.log(`    • Dummy DATA_ORDER        : ${dummyOrderCount}`);
   console.log(`    • Dummy BIAYA_LANGSUNG    : ${dummyDirectCount}`);
-  console.log(`- JurnalEntri            : ${countRealIndirect + countRealCashIn + countRepaymentTrx + dummyOrderCount + dummyDirectCount}`);
 
   console.log('\n💳 REKAPITULASI SISA HUTANG (DEBT BALANCES):');
   console.log('----------------------------------------------------');

@@ -1,9 +1,8 @@
 // ============================================================
-// SCHEMA — Buku Dapur (v2: Master Transaksi dinamis)
-// Revisi 27 Sep 2026: TipeTransaksi (enum tetap) diganti JenisTransaksi
-// dinamis (full CRUD user), tiap jenis punya kolom wajib + KolomCustom
-// bebas. Order & pembayaran hutang bukan lagi kasus khusus di kode -
-// keduanya cuma JenisTransaksi biasa yang di-seed (isBawaan = true).
+// SCHEMA — Buku Dapur (v3: Cleanup tabel tidak dipakai webf UI)
+// Revisi 08 Okt 2026: Hapus tabel data_pelanggan, data_pemasok,
+// hutang, jenis_akun — tidak ada UI di webf yang menggunakannya.
+// Hapus field order/hutang/pemasok/pelanggan dari Transaksi.
 // ============================================================
 
 generator client {
@@ -54,44 +53,14 @@ model Pengguna {
   @@map("pengguna")
 }
 
-/// Chart of Accounts — SEJAK 29 Sep 2026 ini bukan lagi FK wajib dari
-/// JenisTransaksi/Transaksi (lihat catatan di JenisTransaksi di bawah).
-/// Dipertahankan hanya sebagai daftar SARAN untuk field "Jenis Akun" /
-/// Debit / Kredit yang sekarang teks bebas - dropdown-boleh-ketik-baru,
-/// bukan referensi yang divalidasi.
-model JenisAkun {
-  kodeAkun      String   @id @map("kode_akun") @db.VarChar(10)
-  namaAkun      String   @map("nama_akun") @db.VarChar(150)
-  tipeAkun      String   @map("tipe_akun") @db.VarChar(50)
-  parentKode    String?  @map("parent_kode") @db.VarChar(10)
-  saldoNormal   String   @map("saldo_normal") @db.VarChar(10)
-  aktif         Boolean  @default(true) @map("aktif")
-
-  parent        JenisAkun?  @relation("HierarkiAkun", fields: [parentKode], references: [kodeAkun])
-  anak          JenisAkun[] @relation("HierarkiAkun")
-
-  @@map("jenis_akun")
-}
-
 /// Master Transaksi — daftar jenis transaksi, full CRUD oleh user.
-/// REVISI 29 Sep 2026: scope Neraca/double-entry di-drop dari project
-/// (keputusan sadar, lihat schema-decisions.md) - jenisAkun sekarang
-/// teks bebas/saran saja, BUKAN FK ke JenisAkun, dan tidak lagi wajib
-/// diisi. `arah` tetap wajib karena masih dipakai Laba-Rugi (dihitung
-/// dari nominal + arah, bukan dari jurnal).
 model JenisTransaksi {
   id              Int            @id @default(autoincrement())
   kode            String         @unique @db.VarChar(10)
   namaTransaksi   String         @map("nama_transaksi") @db.VarChar(150)
   arah            ArahTransaksi
-  /// Saran default Debit/Kredit untuk jenis ini (teks bebas, dipakai UI
-  /// buat prefill form entri - bukan referensi akun yang divalidasi).
   jenisAkun       String?        @map("jenis_akun") @db.VarChar(150)
   unitBisnis      String?        @map("unit_bisnis") @db.VarChar(50)
-  /// Jenis yang dibuat otomatis lewat seed (Pendapatan Frozen, Pendapatan
-  /// Siap Saji, Pembayaran Cicilan Hutang) supaya order & hutang langsung
-  /// jalan tanpa setup manual. Tetap full CRUD oleh user — ini CUMA
-  /// penanda asal-usul, bukan proteksi/read-only.
   isBawaan        Boolean        @default(false) @map("is_bawaan")
   aktif           Boolean        @default(true)
   dibuatOleh      Int?           @map("dibuat_oleh")
@@ -104,9 +73,7 @@ model JenisTransaksi {
   @@map("jenis_transaksi")
 }
 
-/// Kolom tambahan bebas per JenisTransaksi (di luar 4 kolom wajib:
-/// tanggal, detail, jenis kas, nominal — plus debit/kredit yang
-/// diwariskan dari JenisTransaksi). Full CRUD oleh user.
+/// Kolom tambahan bebas per JenisTransaksi
 model KolomCustom {
   id               Int            @id @default(autoincrement())
   jenisTransaksiId Int            @map("jenis_transaksi_id")
@@ -114,8 +81,6 @@ model KolomCustom {
   tipeData         TipeDataKolom  @map("tipe_data")
   opsiDropdown     Json?          @map("opsi_dropdown")
   urutan           Int            @default(0)
-  /// Soft-delete: kolom yang sudah punya data historis TIDAK di-hard-
-  /// delete, cukup dinonaktifkan supaya histori entri lama tetap utuh.
   aktif            Boolean        @default(true)
   dibuatOleh       Int?           @map("dibuat_oleh")
   dibuatPada       DateTime       @default(now()) @map("dibuat_pada") @db.DateTime(0)
@@ -125,43 +90,6 @@ model KolomCustom {
 
   @@map("kolom_custom")
   @@index([jenisTransaksiId])
-}
-
-model DataPelanggan {
-  id            Int      @id @default(autoincrement())
-  kode          String   @unique @db.VarChar(20)
-  nama          String   @db.VarChar(150)
-  status        String?  @db.VarChar(50)
-  alamat        String?  @db.VarChar(255)
-  kontakPerson  String?  @map("kontak_person") @db.VarChar(100)
-  telepon       String?  @db.VarChar(30)
-  bankNama      String?  @map("bank_nama") @db.VarChar(100)
-  rekening      String?  @db.VarChar(50)
-  saldoPiutang  Decimal  @default(0) @map("saldo_piutang") @db.Decimal(15, 2)
-  keterangan    String?  @db.Text
-  dibuatPada    DateTime @default(now()) @map("dibuat_pada") @db.DateTime(0)
-
-  transaksi     Transaksi[]
-
-  @@map("data_pelanggan")
-}
-
-model DataPemasok {
-  id            Int      @id @default(autoincrement())
-  kode          String   @unique @db.VarChar(20)
-  nama          String   @db.VarChar(150)
-  alamat        String?  @db.VarChar(255)
-  kontakPerson  String?  @map("kontak_person") @db.VarChar(100)
-  telepon       String?  @db.VarChar(30)
-  bankNama      String?  @map("bank_nama") @db.VarChar(100)
-  rekening      String?  @db.VarChar(50)
-  saldoHutang   Decimal  @default(0) @map("saldo_hutang") @db.Decimal(15, 2)
-  keterangan    String?  @db.Text
-  dibuatPada    DateTime @default(now()) @map("dibuat_pada") @db.DateTime(0)
-
-  transaksi     Transaksi[]
-
-  @@map("data_pemasok")
 }
 
 model Produk {
@@ -174,17 +102,11 @@ model Produk {
   aktif         Boolean  @default(true)
   dibuatPada    DateTime @default(now()) @map("dibuat_pada") @db.DateTime(0)
 
-  transaksi     Transaksi[]
-
   @@map("produk")
 }
 
 /// Entri Transaksi — TABEL INTI. Satu baris = satu entri di bawah satu
-/// JenisTransaksi. Kolom wajib: tanggal, detail (Keterangan), jenisKas,
-/// nominal. Debit/Kredit opsional, teks bebas (lihat catatan di kolom
-/// masing-masing). customData menampung isian KolomCustom (key =
-/// KolomCustom.id sebagai string, value = nilai). Field pemasokId/
-/// pelangganId/produkId/dst dipertahankan untuk order & hutang.
+/// JenisTransaksi. Kolom wajib: tanggal, detail, jenisKas, nominal.
 model Transaksi {
   id               Int             @id @default(autoincrement())
   kode             String          @unique @db.VarChar(30)
@@ -192,35 +114,16 @@ model Transaksi {
   unitBisnis       String?         @map("unit_bisnis") @db.VarChar(50)
 
   jenisTransaksiId Int             @map("jenis_transaksi_id")
-  namaTransaksi    String          @map("nama_transaksi") @db.VarChar(150) // snapshot
+  namaTransaksi    String          @map("nama_transaksi") @db.VarChar(150)
 
-  detail           String?         @db.VarChar(255) // "Keterangan" di UI
+  detail           String?         @db.VarChar(255)
   jenisKas         String?         @map("jenis_kas") @db.VarChar(50)
   nominal          Decimal         @db.Decimal(15, 2)
 
-  /// Debit/Kredit: SEJAK 29 Sep 2026 teks bebas yang diketik user sendiri
-  /// (opsional, bukan referensi akun, bukan bagian dari jurnal
-  /// berpasangan). Neraca otomatis di luar scope project - lihat
-  /// schema-decisions.md untuk alasan keputusannya.
   debit            String?         @db.VarChar(150)
   kredit           String?         @db.VarChar(150)
 
   customData       Json?           @map("custom_data")
-
-  // --- khusus BIAYA_LANGSUNG / pemasok ---
-  pemasokId        Int?            @map("pemasok_id")
-
-  // --- khusus pembayaran cicilan hutang ---
-  hutangId         Int?            @map("hutang_id")
-
-  // --- khusus order ---
-  pelangganId      Int?            @map("pelanggan_id")
-  produkId         Int?            @map("produk_id")
-  jumlah           Int?
-  hargaSatuan      Decimal?        @map("harga_satuan") @db.Decimal(15, 2)
-  jumlahBayar      Decimal?        @map("jumlah_bayar") @db.Decimal(15, 2)
-  sisaPiutang      Decimal?        @map("sisa_piutang") @db.Decimal(15, 2)
-  sumberOrder      String?         @map("sumber_order") @db.VarChar(50) // WA / IG / GrabFood
 
   sumberInput      SumberInput     @default(MANUAL) @map("sumber_input")
   dibuatOleh       Int             @map("dibuat_oleh")
@@ -228,10 +131,6 @@ model Transaksi {
   diubahPada       DateTime        @updatedAt @map("diubah_pada") @db.DateTime(0)
 
   jenisTransaksi   JenisTransaksi  @relation(fields: [jenisTransaksiId], references: [id])
-  pemasok          DataPemasok?    @relation(fields: [pemasokId], references: [id])
-  hutang           Hutang?         @relation(fields: [hutangId], references: [id])
-  pelanggan        DataPelanggan?  @relation(fields: [pelangganId], references: [id])
-  produk           Produk?         @relation(fields: [produkId], references: [id])
   pengguna         Pengguna        @relation(fields: [dibuatOleh], references: [id])
 
   @@map("transaksi")
@@ -240,26 +139,7 @@ model Transaksi {
   @@index([unitBisnis])
 }
 
-
-/// Cicilan/pembayaran hutang tidak punya tabel sendiri — jadi baris biasa
-/// di `transaksi` (jenisTransaksi bawaan "Pembayaran Cicilan Hutang"),
-/// di-link lewat hutangId. sisaHutang dikurangi tiap ada pembayaran.
-model Hutang {
-  id              Int       @id @default(autoincrement())
-  namaKreditur    String    @map("nama_kreditur") @db.VarChar(150)
-  jaminan         String?   @db.VarChar(150)
-  jumlahPinjaman  Decimal   @map("jumlah_pinjaman") @db.Decimal(15, 2)
-  tanggalMulai    DateTime? @map("tanggal_mulai") @db.Date
-  sisaHutang      Decimal   @map("sisa_hutang") @db.Decimal(15, 2)
-  dibuatPada      DateTime  @default(now()) @map("dibuat_pada") @db.DateTime(0)
-
-  transaksi       Transaksi[]
-
-  @@map("hutang")
-}
-
-/// Fitur "Buat Tabel Bebas" — TERPISAH TOTAL dari Master Transaksi/
-/// akuntansi. Murni pendataan generik (contoh: Hutang Planning).
+/// Fitur "Buat Tabel Bebas" — TERPISAH TOTAL dari Master Transaksi.
 model TabelBebas {
   id           Int                @id @default(autoincrement())
   namaTabel    String             @unique @map("nama_tabel") @db.VarChar(100)
@@ -301,9 +181,7 @@ model BarisTabelBebas {
   @@index([tabelBebasId])
 }
 
-/// Riwayat / audit log — dipakai tab "Riwayat". TIDAK ADA TTL/auto-delete
-/// - semua histori disimpan permanen. UI default filter 7 hari terakhir,
-/// tapi endpoint tetap terima query param range lebih panjang.
+/// Riwayat / audit log
 model LogAudit {
   id             Int      @id @default(autoincrement())
   penggunaId     Int      @map("pengguna_id")
@@ -314,8 +192,8 @@ model LogAudit {
   command        String?  @db.VarChar(50)
   labelRecord    String   @map("label_record") @db.VarChar(150)
   detail         String?  @db.VarChar(255)
-  dataSebelum    String?  @map("data_sebelum") @db.Text // JSON
-  dataSesudah    String?  @map("data_sesudah") @db.Text // JSON
+  dataSebelum    String?  @map("data_sebelum") @db.Text
+  dataSesudah    String?  @map("data_sesudah") @db.Text
   dibuatPada     DateTime @default(now()) @map("dibuat_pada") @db.DateTime(0)
 
   pengguna       Pengguna @relation(fields: [penggunaId], references: [id])

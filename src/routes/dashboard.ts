@@ -6,8 +6,6 @@ import { KODE_JENIS_BAWAAN } from '../utils/jenisBawaan';
 
 const router = Router();
 
-// Tidak di-cache secara sengaja: jenis bawaan ini full-CRUD oleh user,
-// jadi ID-nya bisa berubah kapan saja - selalu query ulang.
 async function orderJenisIds(): Promise<number[]> {
   const list = await prisma.jenisTransaksi.findMany({
     where: { kode: { in: [KODE_JENIS_BAWAAN.PENDAPATAN_FROZEN, KODE_JENIS_BAWAAN.PENDAPATAN_SIAP_SAJI] } },
@@ -23,7 +21,6 @@ router.get('/summary', async (req: AuthRequest, res: Response, next) => {
   try {
     const { periode = '7d' } = req.query;
     
-    // Calculate date range
     const today = new Date();
     let startDate = new Date();
     
@@ -35,11 +32,7 @@ router.get('/summary', async (req: AuthRequest, res: Response, next) => {
       startDate.setDate(today.getDate() - 30);
     }
 
-    // Saldo kas: sejak Debit/Kredit jadi teks bebas (bukan akun yang
-    // divalidasi), "Kas Utama" beneran tidak bisa dihitung lagi dari
-    // jurnal. Estimasi terbaik yang masih valid: net kas masuk (semua
-    // entri arah PEMASUKAN) dikurangi kas keluar (arah PENGELUARAN) dari
-    // seluruh histori transaksi - sama seperti dasar hitung Laba-Rugi.
+    // Saldo kas: net pemasukan - pengeluaran
     const [pemasukanAgg, pengeluaranAgg] = await Promise.all([
       prisma.transaksi.aggregate({
         where: { tanggal: { lte: today }, jenisTransaksi: { arah: 'PEMASUKAN' } },
@@ -53,46 +46,18 @@ router.get('/summary', async (req: AuthRequest, res: Response, next) => {
 
     const saldo_kas = Number(pemasukanAgg._sum.nominal || 0) - Number(pengeluaranAgg._sum.nominal || 0);
 
-    // Get accounts receivable
-    const customersWithDebt = await prisma.dataPelanggan.findMany({
-      where: { saldoPiutang: { gt: 0 } }
-    });
-
-    const piutang_customer = {
-      total: customersWithDebt.reduce((sum, c) => sum + Number(c.saldoPiutang), 0),
-      jumlah_customer: customersWithDebt.length
-    };
-
-    // Get accounts payable
-    const suppliersWithDebt = await prisma.dataPemasok.findMany({
-      where: { saldoHutang: { gt: 0 } }
-    });
-
-    const hutang_supplier = {
-      total: suppliersWithDebt.reduce((sum, s) => sum + Number(s.saldoHutang), 0)
-    };
-
-    // Get new orders
-    const newOrders = await prisma.transaksi.findMany({
+    // Get order count
+    const orderCount = await prisma.transaksi.count({
       where: {
         jenisTransaksiId: { in: await orderJenisIds() },
         tanggal: { gte: startDate }
       }
     });
 
-    const orderBreakdown = newOrders.reduce((acc, order) => {
-      const src = order.sumberOrder || 'LAIN';
-      acc[src] = (acc[src] || 0) + 1;
-      return acc;
-    }, {} as Record<string, number>);
-
     res.json(successResponse({
       saldo_kas,
-      piutang_customer,
-      hutang_supplier,
       order_baru: {
-        total: newOrders.length,
-        breakdown: orderBreakdown
+        total: orderCount
       }
     }));
   } catch (error) {
@@ -179,6 +144,52 @@ router.get('/aktivitas-terbaru', async (req: AuthRequest, res: Response, next) =
     }));
 
     res.json(successResponse(transformed));
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /dashboard/pemasukan-pengeluaran
+router.get('/pemasukan-pengeluaran', async (req: AuthRequest, res: Response, next) => {
+  try {
+    const { periode = '30d' } = req.query;
+    const today = new Date();
+    const startDate = new Date();
+    if (periode === '7d') startDate.setDate(today.getDate() - 7);
+    else if (periode === '30d') startDate.setDate(today.getDate() - 30);
+    else startDate.setDate(today.getDate() - 90);
+
+    const transactions = await prisma.transaksi.findMany({
+      where: { tanggal: { gte: startDate, lte: today } },
+      select: { tanggal: true, nominal: true, jenisTransaksi: { select: { arah: true } } },
+    });
+
+    const dailyData: Record<string, { pemasukan: number; pengeluaran: number }> = {};
+    for (const t of transactions) {
+      const key = t.tanggal.toISOString().split('T')[0];
+      if (!dailyData[key]) dailyData[key] = { pemasukan: 0, pengeluaran: 0 };
+      if (t.jenisTransaksi.arah === 'PEMASUKAN') {
+        dailyData[key].pemasukan += Number(t.nominal);
+      } else {
+        dailyData[key].pengeluaran += Number(t.nominal);
+      }
+    }
+
+    const result = Object.entries(dailyData)
+      .map(([tanggal, data]) => ({ tanggal, ...data }))
+      .sort((a, b) => new Date(a.tanggal).getTime() - new Date(b.tanggal).getTime());
+
+    const totalPemasukan = result.reduce((s, r) => s + r.pemasukan, 0);
+    const totalPengeluaran = result.reduce((s, r) => s + r.pengeluaran, 0);
+
+    res.json(successResponse({
+      daily: result,
+      totals: {
+        pemasukan: totalPemasukan,
+        pengeluaran: totalPengeluaran,
+        laba: totalPemasukan - totalPengeluaran,
+      },
+    }));
   } catch (error) {
     next(error);
   }

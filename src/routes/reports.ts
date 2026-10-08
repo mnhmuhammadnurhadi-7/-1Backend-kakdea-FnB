@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { successResponse, errorResponse } from '../utils/response';
 import prisma from '../utils/database';
+import * as XLSX from 'xlsx';
 
 const router = Router();
 
@@ -99,16 +100,78 @@ router.get('/perubahan-modal', async (req: AuthRequest, res: Response, next) => 
   }
 });
 
-// GET /reports/export (placeholder for Excel export)
-router.get('/export', async (req: AuthRequest, res: Response, next) => {
+// GET /reports/export/transactions — download Excel file
+router.get('/export/transactions', async (req: AuthRequest, res: Response, next) => {
   try {
-    const { type, format } = req.query;
+    const { jenis_transaksi_id, tanggal_mulai, tanggal_selesai } = req.query;
+    const where: any = {};
+    if (jenis_transaksi_id) where.jenisTransaksiId = parseInt(String(jenis_transaksi_id));
+    if (tanggal_mulai || tanggal_selesai) {
+      where.tanggal = {};
+      if (tanggal_mulai) where.tanggal.gte = new Date(tanggal_mulai as string);
+      if (tanggal_selesai) where.tanggal.lte = new Date(tanggal_selesai as string);
+    }
 
-    res.json(successResponse({
-      message: 'Export functionality - generates Excel file',
-      type,
-      format,
+    const transactions = await prisma.transaksi.findMany({
+      where,
+      include: { jenisTransaksi: true },
+      orderBy: { tanggal: 'desc' },
+    });
+
+    const rows = transactions.map(t => ({
+      'Kode': t.kode,
+      'Tanggal': t.tanggal.toISOString().split('T')[0],
+      'Jenis Transaksi': t.namaTransaksi,
+      'Keterangan': t.detail || '',
+      'Nominal': Number(t.nominal),
+      'Debit': t.debit || '',
+      'Kredit': t.kredit || '',
+      'Arah': t.jenisTransaksi?.arah || '',
     }));
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Transaksi');
+    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename=transaksi_${Date.now()}.xlsx`);
+    res.send(Buffer.from(buffer));
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /reports/export/free-table/:id — download Tabel Bebas as Excel
+router.get('/export/free-table/:id', async (req: AuthRequest, res: Response, next) => {
+  try {
+    const id = parseInt(String(req.params.id));
+    const table = await prisma.tabelBebas.findUnique({
+      where: { id },
+      include: {
+        kolom: { orderBy: { urutan: 'asc' } },
+        baris: { orderBy: { dibuatPada: 'desc' } },
+      },
+    });
+    if (!table) throw errorResponse('Tabel tidak ditemukan', 404);
+
+    const rows = table.baris.map(b => {
+      const rowData: Record<string, any> = {};
+      for (const k of table.kolom) {
+        rowData[k.namaKolom] = (b.data as any)?.[String(k.id)] ?? '';
+      }
+      return rowData;
+    });
+
+    const ws = XLSX.utils.json_to_sheet(rows.length > 0 ? rows : [{}]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, table.namaTabel.slice(0, 31));
+    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    const safeName = table.namaTabel.replace(/[^a-zA-Z0-9]/g, '_');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename=${safeName}_${Date.now()}.xlsx`);
+    res.send(Buffer.from(buffer));
   } catch (error) {
     next(error);
   }
