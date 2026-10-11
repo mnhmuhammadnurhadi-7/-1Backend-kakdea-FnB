@@ -69,13 +69,15 @@ router.post('/', async (req: AuthRequest, res: Response, next) => {
       satuan,
       harga_default,
       hargaDefault,
+      gambar,
+      deskripsi,
     } = req.body;
-    
-    const finalKode = kode || kode_produk;
+
+    const finalKode = kode || kode_produk || `PRD${Date.now()}`;
     const finalNama = namaBarang || nama_barang;
 
-    if (!finalKode || !finalNama) {
-      throw errorResponse('kode (kode_produk) and namaBarang (nama_barang) are required');
+    if (!finalNama) {
+      throw errorResponse('namaBarang (nama_barang) is required');
     }
 
     const product = await prisma.produk.create({
@@ -85,6 +87,8 @@ router.post('/', async (req: AuthRequest, res: Response, next) => {
         varian,
         satuan: satuan || 'pcs',
         hargaDefault: (hargaDefault ?? harga_default) || 0,
+        gambar,
+        deskripsi,
         aktif: true,
       }
     });
@@ -118,10 +122,12 @@ router.put('/:id', async (req: AuthRequest, res: Response, next) => {
       satuan,
       harga_default,
       hargaDefault,
+      gambar,
+      deskripsi,
       aktif,
       is_active
     } = req.body;
-    
+
     const existing = await prisma.produk.findUnique({ where: { id } });
     if (!existing) {
       throw errorResponse('Product not found', 404);
@@ -133,6 +139,8 @@ router.put('/:id', async (req: AuthRequest, res: Response, next) => {
     if (varian !== undefined) updateData.varian = varian;
     if (satuan !== undefined) updateData.satuan = satuan;
     if (hargaDefault !== undefined || harga_default !== undefined) updateData.hargaDefault = hargaDefault ?? harga_default;
+    if (gambar !== undefined) updateData.gambar = gambar;
+    if (deskripsi !== undefined) updateData.deskripsi = deskripsi;
     if (aktif !== undefined || is_active !== undefined) updateData.aktif = (aktif !== undefined ? aktif : is_active) === true;
 
     const product = await prisma.produk.update({

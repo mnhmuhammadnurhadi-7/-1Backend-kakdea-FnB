@@ -12,8 +12,10 @@ const client_1 = require("@prisma/client");
 const router = (0, express_1.Router)();
 router.use(auth_1.authenticate);
 // ================= JENIS TRANSAKSI (Master Transaksi) =================
-// GET /transaction-types  -- 4 kolom default: kode, jenis transaksi,
-// nama transaksi, nominal (nominal dihitung agregat dari entri)
+// Ini daftar "tab" (Biaya Tak Langsung, Frozen Food, dst) - dipakai
+// webf buat generate ChipSelector dinamis. Endpoint feed gabungan semua
+// entrinya sendiri ada di GET /transactions (tanpa filter).
+// GET /transaction-types
 router.get('/', async (req, res, next) => {
     try {
         const { unit_bisnis, business_unit, aktif } = req.query;
@@ -28,25 +30,12 @@ router.get('/', async (req, res, next) => {
         const jenisList = await database_1.default.jenisTransaksi.findMany({
             where,
             include: {
-                akunDebit: true,
-                akunKredit: true,
                 kolomCustom: { where: { aktif: true }, orderBy: { urutan: 'asc' } },
                 _count: { select: { transaksi: true } },
             },
             orderBy: { kode: 'asc' },
         });
-        const withNominal = await Promise.all(jenisList.map(async (j) => {
-            const agg = await database_1.default.transaksi.aggregate({
-                where: { jenisTransaksiId: j.id },
-                _sum: { nominal: true },
-            });
-            return {
-                ...j,
-                nominal: Number(agg._sum.nominal || 0),
-                jumlah_entri: j._count.transaksi,
-            };
-        }));
-        res.json((0, response_1.successResponse)(withNominal));
+        res.json((0, response_1.successResponse)(jenisList));
     }
     catch (error) {
         next(error);
@@ -58,11 +47,7 @@ router.get('/:id', async (req, res, next) => {
         const id = parseInt(String(req.params.id));
         const jenis = await database_1.default.jenisTransaksi.findUnique({
             where: { id },
-            include: {
-                akunDebit: true,
-                akunKredit: true,
-                kolomCustom: { where: { aktif: true }, orderBy: { urutan: 'asc' } },
-            },
+            include: { kolomCustom: { where: { aktif: true }, orderBy: { urutan: 'asc' } } },
         });
         if (!jenis)
             throw (0, response_1.errorResponse)('Jenis transaksi tidak ditemukan', 404);
@@ -72,29 +57,20 @@ router.get('/:id', async (req, res, next) => {
         next(error);
     }
 });
-// POST /transaction-types  -- buat jenis baru (user full CRUD)
+// POST /transaction-types  -- buat jenis baru. Cuma kode, nama, arah
+// yang wajib - jenisAkun sekadar saran teks bebas, opsional.
 router.post('/', async (req, res, next) => {
     try {
-        const { kode, nama_transaksi, namaTransaksi, arah, akun_debit_kode, akunDebitKode, akun_kredit_kode, akunKreditKode, unit_bisnis, unitBisnis, } = req.body;
+        const { kode, nama_transaksi, namaTransaksi, arah, jenis_akun, jenisAkun, unit_bisnis, unitBisnis } = req.body;
         const finalKode = kode;
         const finalNama = namaTransaksi || nama_transaksi;
         const finalArah = arah;
-        const finalDebit = akunDebitKode || akun_debit_kode;
-        const finalKredit = akunKreditKode || akun_kredit_kode;
-        if (!finalKode || !finalNama || !finalArah || !finalDebit || !finalKredit) {
-            throw (0, response_1.errorResponse)('kode, nama_transaksi, arah, akun_debit_kode, dan akun_kredit_kode wajib diisi');
+        if (!finalKode || !finalNama || !finalArah) {
+            throw (0, response_1.errorResponse)('kode, nama_transaksi, dan arah wajib diisi');
         }
         if (!['PEMASUKAN', 'PENGELUARAN'].includes(finalArah)) {
             throw (0, response_1.errorResponse)('arah harus PEMASUKAN atau PENGELUARAN');
         }
-        const [debitAkun, kreditAkun] = await Promise.all([
-            database_1.default.jenisAkun.findUnique({ where: { kodeAkun: finalDebit } }),
-            database_1.default.jenisAkun.findUnique({ where: { kodeAkun: finalKredit } }),
-        ]);
-        if (!debitAkun)
-            throw (0, response_1.errorResponse)(`Akun debit "${finalDebit}" tidak ditemukan`, 404);
-        if (!kreditAkun)
-            throw (0, response_1.errorResponse)(`Akun kredit "${finalKredit}" tidak ditemukan`, 404);
         const existing = await database_1.default.jenisTransaksi.findUnique({ where: { kode: finalKode } });
         if (existing)
             throw (0, response_1.errorResponse)(`Kode "${finalKode}" sudah dipakai`, 409);
@@ -103,8 +79,7 @@ router.post('/', async (req, res, next) => {
                 kode: finalKode,
                 namaTransaksi: finalNama,
                 arah: finalArah,
-                akunDebitKode: finalDebit,
-                akunKreditKode: finalKredit,
+                jenisAkun: jenisAkun || jenis_akun || null,
                 unitBisnis: unitBisnis || unit_bisnis || null,
                 dibuatOleh: req.user.id,
             },
@@ -116,41 +91,30 @@ router.post('/', async (req, res, next) => {
         next(error);
     }
 });
-// PUT /transaction-types/:id
+// PUT /transaction-types/:id  -- ini juga yang dipakai modal "Edit Table"
+// (ubah nama/arah/jenisAkun jenis, bukan edit satu baris entri)
 router.put('/:id', async (req, res, next) => {
     try {
         const id = parseInt(String(req.params.id));
         const before = await database_1.default.jenisTransaksi.findUnique({ where: { id } });
         if (!before)
             throw (0, response_1.errorResponse)('Jenis transaksi tidak ditemukan', 404);
-        const { kode, nama_transaksi, namaTransaksi, arah, akun_debit_kode, akunDebitKode, akun_kredit_kode, akunKreditKode, unit_bisnis, unitBisnis, aktif, } = req.body;
+        const { kode, nama_transaksi, namaTransaksi, arah, jenis_akun, jenisAkun, unit_bisnis, unitBisnis, aktif } = req.body;
         const data = {};
         if (kode !== undefined)
             data.kode = kode;
-        if ((namaTransaksi || nama_transaksi) !== undefined)
-            data.namaTransaksi = namaTransaksi || nama_transaksi;
+        if ((namaTransaksi ?? nama_transaksi) !== undefined)
+            data.namaTransaksi = namaTransaksi ?? nama_transaksi;
         if (arah !== undefined) {
             if (!['PEMASUKAN', 'PENGELUARAN'].includes(arah)) {
                 throw (0, response_1.errorResponse)('arah harus PEMASUKAN atau PENGELUARAN');
             }
             data.arah = arah;
         }
-        const finalDebit = akunDebitKode || akun_debit_kode;
-        const finalKredit = akunKreditKode || akun_kredit_kode;
-        if (finalDebit !== undefined) {
-            const akun = await database_1.default.jenisAkun.findUnique({ where: { kodeAkun: finalDebit } });
-            if (!akun)
-                throw (0, response_1.errorResponse)(`Akun debit "${finalDebit}" tidak ditemukan`, 404);
-            data.akunDebitKode = finalDebit;
-        }
-        if (finalKredit !== undefined) {
-            const akun = await database_1.default.jenisAkun.findUnique({ where: { kodeAkun: finalKredit } });
-            if (!akun)
-                throw (0, response_1.errorResponse)(`Akun kredit "${finalKredit}" tidak ditemukan`, 404);
-            data.akunKreditKode = finalKredit;
-        }
-        if ((unitBisnis || unit_bisnis) !== undefined)
-            data.unitBisnis = unitBisnis || unit_bisnis;
+        if ((jenisAkun ?? jenis_akun) !== undefined)
+            data.jenisAkun = jenisAkun ?? jenis_akun;
+        if ((unitBisnis ?? unit_bisnis) !== undefined)
+            data.unitBisnis = unitBisnis ?? unit_bisnis;
         if (aktif !== undefined)
             data.aktif = aktif;
         const updated = await database_1.default.jenisTransaksi.update({ where: { id }, data });
@@ -161,9 +125,8 @@ router.put('/:id', async (req, res, next) => {
         next(error);
     }
 });
-// DELETE /transaction-types/:id
-// Menolak hapus kalau masih ada entri yang pakai jenis ini (409) - data
-// finansial tidak boleh cascade delete. Sarankan nonaktifkan (aktif=false).
+// DELETE /transaction-types/:id  -- ini "Hapus Table" di modal Edit Table.
+// Menolak hapus kalau masih ada entri (409) - sarankan nonaktifkan.
 router.delete('/:id', async (req, res, next) => {
     try {
         const id = parseInt(String(req.params.id));
@@ -187,6 +150,7 @@ router.delete('/:id', async (req, res, next) => {
     }
 });
 // ================= KOLOM CUSTOM (per Jenis Transaksi) =================
+// Tidak berubah dari revisi sebelumnya.
 // GET /transaction-types/:id/columns
 router.get('/:id/columns', async (req, res, next) => {
     try {
@@ -208,7 +172,7 @@ router.post('/:id/columns', async (req, res, next) => {
         const jenis = await database_1.default.jenisTransaksi.findUnique({ where: { id: jenisTransaksiId } });
         if (!jenis)
             throw (0, response_1.errorResponse)('Jenis transaksi tidak ditemukan', 404);
-        const { nama_kolom, namaKolom, tipe_data, tipeData, opsi_dropdown, opsiDropdown, urutan, } = req.body;
+        const { nama_kolom, namaKolom, tipe_data, tipeData, opsi_dropdown, opsiDropdown, urutan } = req.body;
         const finalNama = namaKolom || nama_kolom;
         const finalTipe = (tipeData || tipe_data);
         const finalOpsi = opsiDropdown || opsi_dropdown;
@@ -269,18 +233,12 @@ router.put('/:id/columns/:columnId', async (req, res, next) => {
     }
 });
 // DELETE /transaction-types/:id/columns/:columnId
-// Soft-delete kalau sudah ada entri yang mengisi kolom ini di customData
-// (supaya histori lama tetap tampil), hard-delete kalau belum ada sama
-// sekali data yang memakainya.
 router.delete('/:id/columns/:columnId', async (req, res, next) => {
     try {
         const columnId = parseInt(String(req.params.columnId));
         const kolom = await database_1.default.kolomCustom.findUnique({ where: { id: columnId } });
         if (!kolom)
             throw (0, response_1.errorResponse)('Kolom tidak ditemukan', 404);
-        // Cek apakah ada entri yang customData-nya memuat key kolom ini.
-        // Prisma tidak punya "JSON key exists" filter yang portable di MySQL
-        // tanpa raw query, jadi kita cek dengan JSON_CONTAINS_PATH via $queryRaw.
         const pakaiRows = await database_1.default.$queryRaw `
       SELECT COUNT(*) as cnt FROM transaksi
       WHERE jenis_transaksi_id = ${kolom.jenisTransaksiId}

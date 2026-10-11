@@ -49,6 +49,8 @@ model Pengguna {
   jenisTransaksi  JenisTransaksi[]
   kolomCustom     KolomCustom[]
   tabelBebas      TabelBebas[]
+  cmsContent      CmsContent[]
+  cmsMenu         CmsMenu[]
 
   @@map("pengguna")
 }
@@ -99,6 +101,8 @@ model Produk {
   varian        String?  @db.VarChar(100)
   satuan        String   @default("pcs") @db.VarChar(20)
   hargaDefault  Decimal  @default(0) @map("harga_default") @db.Decimal(15, 2)
+  gambar        String?  @db.Text
+  deskripsi      String?  @db.Text
   aktif         Boolean  @default(true)
   dibuatPada    DateTime @default(now()) @map("dibuat_pada") @db.DateTime(0)
 
@@ -202,4 +206,38 @@ model LogAudit {
   @@index([tabelTarget])
   @@index([sumber])
   @@index([dibuatPada])
+}
+
+/// CMS Content - konten yang bisa dikustomisasi untuk customer page
+model CmsContent {
+  id           Int      @id @default(autoincrement())
+  key          String   @unique @db.VarChar(100)
+  judul        String   @db.VarChar(255)
+  subJudul     String?  @map("sub_judul") @db.Text
+  konten       String?  @db.Text
+  aktif        Boolean  @default(true)
+  dibuatOleh   Int      @map("dibuat_oleh")
+  dibuatPada   DateTime @default(now()) @map("dibuat_pada") @db.DateTime(0)
+  diubahPada   DateTime @updatedAt @map("diubah_pada") @db.DateTime(0)
+
+  pengguna     Pengguna @relation(fields: [dibuatOleh], references: [id])
+
+  @@map("cms_content")
+}
+
+/// CMS Menu - menu navigasi untuk customer page
+model CmsMenu {
+  id           Int      @id @default(autoincrement())
+  label        String   @db.VarChar(100)
+  path         String   @db.VarChar(100)
+  urutan       Int      @default(0)
+  aktif        Boolean  @default(true)
+  dibuatOleh   Int      @map("dibuat_oleh")
+  dibuatPada   DateTime @default(now()) @map("dibuat_pada") @db.DateTime(0)
+  diubahPada   DateTime @updatedAt @map("diubah_pada") @db.DateTime(0)
+
+  pengguna     Pengguna @relation(fields: [dibuatOleh], references: [id])
+
+  @@map("cms_menu")
+  @@index([urutan])
 }

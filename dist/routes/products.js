@@ -58,11 +58,11 @@ router.get('/:id', async (req, res, next) => {
 // POST /products
 router.post('/', async (req, res, next) => {
     try {
-        const { kode, kode_produk, nama_barang, namaBarang, varian, satuan, harga_default, hargaDefault, } = req.body;
-        const finalKode = kode || kode_produk;
+        const { kode, kode_produk, nama_barang, namaBarang, varian, satuan, harga_default, hargaDefault, gambar, deskripsi, } = req.body;
+        const finalKode = kode || kode_produk || `PRD${Date.now()}`;
         const finalNama = namaBarang || nama_barang;
-        if (!finalKode || !finalNama) {
-            throw (0, response_1.errorResponse)('kode (kode_produk) and namaBarang (nama_barang) are required');
+        if (!finalNama) {
+            throw (0, response_1.errorResponse)('namaBarang (nama_barang) is required');
         }
         const product = await database_1.default.produk.create({
             data: {
@@ -71,6 +71,8 @@ router.post('/', async (req, res, next) => {
                 varian,
                 satuan: satuan || 'pcs',
                 hargaDefault: (hargaDefault ?? harga_default) || 0,
+                gambar,
+                deskripsi,
                 aktif: true,
             }
         });
@@ -86,7 +88,7 @@ router.post('/', async (req, res, next) => {
 router.put('/:id', async (req, res, next) => {
     try {
         const id = parseInt(String(req.params.id));
-        const { kode, kode_produk, nama_barang, namaBarang, varian, satuan, harga_default, hargaDefault, aktif, is_active } = req.body;
+        const { kode, kode_produk, nama_barang, namaBarang, varian, satuan, harga_default, hargaDefault, gambar, deskripsi, aktif, is_active } = req.body;
         const existing = await database_1.default.produk.findUnique({ where: { id } });
         if (!existing) {
             throw (0, response_1.errorResponse)('Product not found', 404);
@@ -102,6 +104,10 @@ router.put('/:id', async (req, res, next) => {
             updateData.satuan = satuan;
         if (hargaDefault !== undefined || harga_default !== undefined)
             updateData.hargaDefault = hargaDefault ?? harga_default;
+        if (gambar !== undefined)
+            updateData.gambar = gambar;
+        if (deskripsi !== undefined)
+            updateData.deskripsi = deskripsi;
         if (aktif !== undefined || is_active !== undefined)
             updateData.aktif = (aktif !== undefined ? aktif : is_active) === true;
         const product = await database_1.default.produk.update({
