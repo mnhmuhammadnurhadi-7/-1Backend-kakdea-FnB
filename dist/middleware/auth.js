@@ -7,13 +7,16 @@ exports.authenticate = void 0;
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const response_1 = require("../utils/response");
 const authenticate = (req, res, next) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return next((0, response_1.errorResponse)('Unauthorized - No token provided', 401));
+    }
+    const token = authHeader.substring(7);
+    const JWT_SECRET = process.env.JWT_SECRET;
+    if (!JWT_SECRET) {
+        return next(new Error('JWT_SECRET belum diatur di environment'));
+    }
     try {
-        const authHeader = req.headers.authorization;
-        if (!authHeader || !authHeader.startsWith('Bearer ')) {
-            throw (0, response_1.errorResponse)('Unauthorized - No token provided', 401);
-        }
-        const token = authHeader.substring(7);
-        const JWT_SECRET = process.env.JWT_SECRET || 'default-secret';
         const decoded = jsonwebtoken_1.default.verify(token, JWT_SECRET);
         req.user = decoded;
         next();

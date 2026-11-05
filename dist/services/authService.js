@@ -7,7 +7,6 @@ exports.hashPassword = exports.login = void 0;
 const bcrypt_1 = __importDefault(require("bcrypt"));
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const database_1 = __importDefault(require("../utils/database"));
-const JWT_SECRET = process.env.JWT_SECRET || 'default-secret';
 const login = async (params) => {
     const user = await database_1.default.pengguna.findUnique({
         where: { email: params.email }
@@ -18,6 +17,11 @@ const login = async (params) => {
     const isValidPassword = await bcrypt_1.default.compare(params.password, user.passwordHash);
     if (!isValidPassword) {
         throw new Error('Invalid credentials');
+    }
+    // Dibaca saat dipanggil (bukan saat modul dimuat) supaya .env sudah ter-load.
+    const JWT_SECRET = process.env.JWT_SECRET;
+    if (!JWT_SECRET) {
+        throw new Error('JWT_SECRET belum diatur di environment');
     }
     const token = jsonwebtoken_1.default.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
     return {

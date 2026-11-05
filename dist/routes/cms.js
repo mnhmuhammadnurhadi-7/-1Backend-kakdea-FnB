@@ -9,53 +9,8 @@ const response_1 = require("../utils/response");
 const database_1 = __importDefault(require("../utils/database"));
 const auditLogService_1 = require("../services/auditLogService");
 const client_1 = require("@prisma/client");
-const multer_1 = __importDefault(require("multer"));
-const path_1 = __importDefault(require("path"));
-const fs_1 = __importDefault(require("fs"));
-// Setup multer untuk upload gambar
-const storage = multer_1.default.diskStorage({
-    destination: (req, file, cb) => {
-        const uploadDir = path_1.default.join(process.cwd(), 'public', 'uploads');
-        if (!fs_1.default.existsSync(uploadDir)) {
-            fs_1.default.mkdirSync(uploadDir, { recursive: true });
-        }
-        cb(null, uploadDir);
-    },
-    filename: (req, file, cb) => {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, uniqueSuffix + path_1.default.extname(file.originalname));
-    }
-});
-const upload = (0, multer_1.default)({
-    storage,
-    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
-    fileFilter: (req, file, cb) => {
-        const allowedTypes = /jpeg|jpg|png|gif|webp/;
-        const extname = allowedTypes.test(path_1.default.extname(file.originalname).toLowerCase());
-        const mimetype = allowedTypes.test(file.mimetype);
-        if (extname && mimetype) {
-            cb(null, true);
-        }
-        else {
-            cb(new Error('Only image files are allowed'));
-        }
-    }
-});
 const router = (0, express_1.Router)();
 router.use(auth_1.authenticate);
-// Upload endpoint untuk gambar
-router.post('/upload', upload.single('file'), async (req, res, next) => {
-    try {
-        if (!req.file) {
-            throw (0, response_1.errorResponse)('No file uploaded', 400);
-        }
-        const fileUrl = `/uploads/${req.file.filename}`;
-        res.json((0, response_1.successResponse)({ url: fileUrl, filename: req.file.filename }));
-    }
-    catch (error) {
-        next(error);
-    }
-});
 // ================= CMS CONTENT =================
 // Untuk headline beranda, konten tentang kami, dll
 // GET /cms/content

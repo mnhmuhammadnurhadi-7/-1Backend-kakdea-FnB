@@ -10,6 +10,21 @@ const database_1 = __importDefault(require("../utils/database"));
 const auditLogService_1 = require("../services/auditLogService");
 const client_1 = require("@prisma/client");
 const router = (0, express_1.Router)();
+const imageDataFrom = (value) => {
+    if (typeof value !== 'string' || !value.startsWith('data:image/'))
+        return null;
+    const match = value.match(/^data:(image\/(?:jpeg|png|webp|gif));base64,([A-Za-z0-9+/]+=*)$/);
+    if (!match)
+        throw (0, response_1.errorResponse)('Format gambar tidak valid', 400);
+    const data = Buffer.from(match[2], 'base64');
+    if (!data.length || data.length > 5 * 1024 * 1024)
+        throw (0, response_1.errorResponse)('Ukuran gambar maksimal 5 MB', 400);
+    return { data, mime: match[1] };
+};
+const withoutImageData = (product) => {
+    const { gambarData: _data, gambarMime: _mime, ...safeProduct } = product;
+    return safeProduct;
+};
 // All routes require authentication
 router.use(auth_1.authenticate);
 // GET /products
@@ -32,7 +47,8 @@ router.get('/', async (req, res, next) => {
         }
         const products = await database_1.default.produk.findMany({
             where,
-            orderBy: { dibuatPada: 'desc' }
+            orderBy: { dibuatPada: 'desc' },
+            select: { id: true, kode: true, namaBarang: true, varian: true, satuan: true, hargaDefault: true, gambar: true, deskripsi: true, aktif: true, dibuatPada: true }
         });
         res.json((0, response_1.successResponse)(products));
     }
@@ -44,12 +60,28 @@ router.get('/', async (req, res, next) => {
 router.get('/:id', async (req, res, next) => {
     try {
         const product = await database_1.default.produk.findUnique({
-            where: { id: parseInt(String(req.params.id)) }
+            where: { id: parseInt(String(req.params.id)) },
+            select: { id: true, kode: true, namaBarang: true, varian: true, satuan: true, hargaDefault: true, gambar: true, deskripsi: true, aktif: true, dibuatPada: true }
         });
         if (!product) {
             throw (0, response_1.errorResponse)('Product not found', 404);
         }
         res.json((0, response_1.successResponse)(product));
+    }
+    catch (error) {
+        next(error);
+    }
+});
+// Mengirim gambar langsung dari kolom BLOB.
+router.get('/:id/image', async (req, res, next) => {
+    try {
+        const product = await database_1.default.produk.findUnique({
+            where: { id: parseInt(String(req.params.id)) },
+            select: { gambarData: true, gambarMime: true, gambar: true },
+        });
+        if (!product?.gambarData || !product.gambarMime)
+            throw (0, response_1.errorResponse)('Gambar tidak ditemukan', 404);
+        res.type(product.gambarMime).set('Cache-Control', 'public, max-age=3600').send(Buffer.from(product.gambarData));
     }
     catch (error) {
         next(error);
@@ -61,6 +93,7 @@ router.post('/', async (req, res, next) => {
         const { kode, kode_produk, nama_barang, namaBarang, varian, satuan, harga_default, hargaDefault, gambar, deskripsi, } = req.body;
         const finalKode = kode || kode_produk || `PRD${Date.now()}`;
         const finalNama = namaBarang || nama_barang;
+        const image = imageDataFrom(gambar);
         if (!finalNama) {
             throw (0, response_1.errorResponse)('namaBarang (nama_barang) is required');
         }
@@ -71,14 +104,19 @@ router.post('/', async (req, res, next) => {
                 varian,
                 satuan: satuan || 'pcs',
                 hargaDefault: (hargaDefault ?? harga_default) || 0,
-                gambar,
+                gambar: image ? null : gambar,
+                ...(image ? { gambarData: image.data, gambarMime: image.mime } : {}),
                 deskripsi,
                 aktif: true,
             }
         });
         // Log audit
         await (0, auditLogService_1.logManualAction)(req.user.id, 'produk', client_1.AksiLog.TAMBAH, product.namaBarang, `Product created: ${product.namaBarang}`, product.id);
-        res.json((0, response_1.successResponse)(product));
+        if (image) {
+            await database_1.default.produk.update({ where: { id: product.id }, data: { gambar: `/api/public/products/${product.id}/image` } });
+            product.gambar = `/api/public/products/${product.id}/image`;
+        }
+        res.json((0, response_1.successResponse)(withoutImageData(product)));
     }
     catch (error) {
         next(error);
@@ -89,7 +127,10 @@ router.put('/:id', async (req, res, next) => {
     try {
         const id = parseInt(String(req.params.id));
         const { kode, kode_produk, nama_barang, namaBarang, varian, satuan, harga_default, hargaDefault, gambar, deskripsi, aktif, is_active } = req.body;
-        const existing = await database_1.default.produk.findUnique({ where: { id } });
+        const existing = await database_1.default.produk.findUnique({
+            where: { id },
+            select: { id: true, kode: true, namaBarang: true, varian: true, satuan: true, hargaDefault: true, gambar: true, deskripsi: true, aktif: true, dibuatPada: true }
+        });
         if (!existing) {
             throw (0, response_1.errorResponse)('Product not found', 404);
         }
@@ -104,8 +145,21 @@ router.put('/:id', async (req, res, next) => {
             updateData.satuan = satuan;
         if (hargaDefault !== undefined || harga_default !== undefined)
             updateData.hargaDefault = hargaDefault ?? harga_default;
-        if (gambar !== undefined)
-            updateData.gambar = gambar;
+        if (gambar !== undefined) {
+            const image = imageDataFrom(gambar);
+            if (image) {
+                updateData.gambar = `/api/public/products/${id}/image`;
+                updateData.gambarData = image.data;
+                updateData.gambarMime = image.mime;
+            }
+            else if (gambar === '') {
+                updateData.gambar = null;
+                updateData.gambarData = null;
+                updateData.gambarMime = null;
+            }
+            else
+                updateData.gambar = gambar;
+        }
         if (deskripsi !== undefined)
             updateData.deskripsi = deskripsi;
         if (aktif !== undefined || is_active !== undefined)
@@ -115,8 +169,8 @@ router.put('/:id', async (req, res, next) => {
             data: updateData
         });
         // Log audit
-        await (0, auditLogService_1.logManualAction)(req.user.id, 'produk', client_1.AksiLog.UBAH, product.namaBarang, `Product updated: ${product.namaBarang}`, product.id, existing, updateData);
-        res.json((0, response_1.successResponse)(product));
+        await (0, auditLogService_1.logManualAction)(req.user.id, 'produk', client_1.AksiLog.UBAH, product.namaBarang, `Product updated: ${product.namaBarang}`, product.id, existing, Object.fromEntries(Object.entries(updateData).filter(([key]) => key !== 'gambarData')));
+        res.json((0, response_1.successResponse)(withoutImageData(product)));
     }
     catch (error) {
         next(error);

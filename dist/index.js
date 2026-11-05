@@ -6,7 +6,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const dotenv_1 = __importDefault(require("dotenv"));
-const path_1 = __importDefault(require("path"));
 const auth_1 = __importDefault(require("./routes/auth"));
 const dashboard_1 = __importDefault(require("./routes/dashboard"));
 const products_1 = __importDefault(require("./routes/products"));
@@ -27,14 +26,8 @@ app.use((0, cors_1.default)({
     origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
     credentials: true
 }));
-app.use(express_1.default.json());
+app.use(express_1.default.json({ limit: '7mb' }));
 app.use(express_1.default.urlencoded({ extended: true }));
-// Serve static files from public/uploads across all common paths
-const uploadsDir = path_1.default.join(process.cwd(), 'public', 'uploads');
-app.use('/uploads', express_1.default.static(uploadsDir));
-app.use('/api/v1/uploads', express_1.default.static(uploadsDir));
-app.use('/api/public/uploads', express_1.default.static(uploadsDir));
-app.use('/api/v1/cms/uploads', express_1.default.static(uploadsDir));
 // Routes
 app.use('/api/v1/auth', auth_1.default);
 app.use('/api/v1/dashboard', dashboard_1.default);

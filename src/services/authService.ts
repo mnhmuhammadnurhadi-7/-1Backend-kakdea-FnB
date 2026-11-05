@@ -2,8 +2,6 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import prisma from '../utils/database';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'default-secret';
-
 export interface LoginParams {
   email: string;
   password: string;
@@ -22,6 +20,12 @@ export const login = async (params: LoginParams) => {
   
   if (!isValidPassword) {
     throw new Error('Invalid credentials');
+  }
+
+  // Dibaca saat dipanggil (bukan saat modul dimuat) supaya .env sudah ter-load.
+  const JWT_SECRET = process.env.JWT_SECRET;
+  if (!JWT_SECRET) {
+    throw new Error('JWT_SECRET belum diatur di environment');
   }
 
   const token = jwt.sign(

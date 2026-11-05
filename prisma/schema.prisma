@@ -98,10 +98,13 @@ model Produk {
   id            Int      @id @default(autoincrement())
   kode          String   @unique @db.VarChar(20)
   namaBarang    String   @map("nama_barang") @db.VarChar(100)
-  varian        String?  @db.VarChar(100)
+  /// Daftar varian dipisah koma, contoh: "Pakai sosis, Pakai keju". Kosong = tanpa varian.
+  varian        String?  @db.Text
   satuan        String   @default("pcs") @db.VarChar(20)
   hargaDefault  Decimal  @default(0) @map("harga_default") @db.Decimal(15, 2)
   gambar        String?  @db.Text
+  gambarData    Bytes?   @map("gambar_data") @db.LongBlob
+  gambarMime    String?  @map("gambar_mime") @db.VarChar(100)
   deskripsi      String?  @db.Text
   aktif         Boolean  @default(true)
   dibuatPada    DateTime @default(now()) @map("dibuat_pada") @db.DateTime(0)

@@ -4,58 +4,12 @@ import { successResponse, errorResponse } from '../utils/response';
 import prisma from '../utils/database';
 import { logManualAction } from '../services/auditLogService';
 import { AksiLog } from '@prisma/client';
-import multer, { StorageEngine, FileFilterCallback } from 'multer';
-import path from 'path';
-import fs from 'fs';
 import express from 'express';
-
-// Setup multer untuk upload gambar
-const storage: StorageEngine = multer.diskStorage({
-  destination: (req: Request, file: any, cb: (error: Error | null, destination: string) => void) => {
-    const uploadDir = path.join(process.cwd(), 'public', 'uploads');
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
-    cb(null, uploadDir);
-  },
-  filename: (req: Request, file: any, cb: (error: Error | null, filename: string) => void) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, uniqueSuffix + path.extname(file.originalname));
-  }
-});
-
-const upload = multer({
-  storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
-  fileFilter: (req: Request, file: any, cb: FileFilterCallback) => {
-    const allowedTypes = /jpeg|jpg|png|gif|webp/;
-    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-    const mimetype = allowedTypes.test(file.mimetype);
-    if (extname && mimetype) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only image files are allowed'));
-    }
-  }
-});
 
 const router = Router();
 
 router.use(authenticate);
 
-
-// Upload endpoint untuk gambar
-router.post('/upload', upload.single('file'), async (req: any, res: Response, next) => {
-  try {
-    if (!req.file) {
-      throw errorResponse('No file uploaded', 400);
-    }
-    const fileUrl = `/uploads/${req.file.filename}`;
-    res.json(successResponse({ url: fileUrl, filename: req.file.filename }));
-  } catch (error) {
-    next(error);
-  }
-});
 
 // ================= CMS CONTENT =================
 // Untuk headline beranda, konten tentang kami, dll
