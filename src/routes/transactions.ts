@@ -99,7 +99,7 @@ router.get('/', async (req: AuthRequest, res: Response, next) => {
         include: {
           jenisTransaksi: { include: { kolomCustom: { where: { aktif: true } } } },
         },
-        orderBy: { tanggal: 'desc' },
+        orderBy: [{ tanggal: 'desc' }, { dibuatPada: 'desc' }, { id: 'desc' }],
         skip,
         take: Number(limit),
       }),

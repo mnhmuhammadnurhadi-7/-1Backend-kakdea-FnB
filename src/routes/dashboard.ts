@@ -65,46 +65,96 @@ router.get('/summary', async (req: AuthRequest, res: Response, next) => {
   }
 });
 
-// GET /dashboard/tren-penjualan
-router.get('/tren-penjualan', async (req: AuthRequest, res: Response, next) => {
+// GET /dashboard/grafik-kas
+router.get('/grafik-kas', async (req: AuthRequest, res: Response, next) => {
   try {
     const { periode = '7d' } = req.query;
-    
+    const allTime = periode === 'semua' || periode === 'all';
+    const days = periode === 'bulanan' || periode === '30d' ? 30 : 7;
     const today = new Date();
-    let startDate = new Date();
-    
-    if (periode === '7d') {
-      startDate.setDate(today.getDate() - 7);
-    } else if (periode === '30d') {
-      startDate.setDate(today.getDate() - 30);
-    }
+    today.setUTCHours(0, 0, 0, 0);
+    const startDate = new Date(today);
+    startDate.setUTCDate(startDate.getUTCDate() - days + 1);
 
-    const orders = await prisma.transaksi.findMany({
+    const transactions = await prisma.transaksi.findMany({
       where: {
-        jenisTransaksiId: { in: await orderJenisIds() },
-        tanggal: { gte: startDate, lte: today }
+        tanggal: allTime ? { lte: today } : { gte: startDate, lte: today }
       },
+      orderBy: [{ tanggal: 'asc' }, { dibuatPada: 'asc' }, { id: 'asc' }],
       select: {
+        id: true,
         tanggal: true,
+        detail: true,
+        namaTransaksi: true,
         nominal: true,
+        jenisTransaksi: { select: { arah: true } },
       }
     });
 
-    // Group by date
-    const trendData = orders.reduce((acc, order) => {
-      const dateKey = order.tanggal.toISOString().split('T')[0];
-      if (!acc[dateKey]) {
-        acc[dateKey] = { tanggal: dateKey, total: 0 };
-      }
-      acc[dateKey].total += Number(order.nominal);
-      return acc;
-    }, {} as Record<string, { tanggal: string; total: number }>);
+    const entriesByDate = new Map<string, Array<{ id: number; detail: string; jenis: string; arah: string; nominal: number }>>();
+    for (const transaction of transactions) {
+      const dateKey = transaction.tanggal.toISOString().split('T')[0];
+      const entries = entriesByDate.get(dateKey) || [];
+      entries.push({
+        id: transaction.id,
+        detail: transaction.detail || transaction.namaTransaksi,
+        jenis: transaction.namaTransaksi,
+        arah: transaction.jenisTransaksi.arah,
+        nominal: Number(transaction.nominal),
+      });
+      entriesByDate.set(dateKey, entries);
+    }
 
-    const result = Object.values(trendData).sort((a, b) => 
-      new Date(a.tanggal).getTime() - new Date(b.tanggal).getTime()
-    );
+    const firstDate = allTime
+      ? transactions.reduce((first, transaction) => transaction.tanggal < first ? transaction.tanggal : first, transactions[0]?.tanggal || today)
+      : startDate;
+    const rangeDays = allTime && transactions.length
+      ? Math.floor((today.getTime() - firstDate.getTime()) / 86_400_000) + 1
+      : allTime ? 0 : days;
+    const result = Array.from({ length: rangeDays }, (_, index) => {
+      const date = new Date(firstDate);
+      date.setUTCDate(firstDate.getUTCDate() + index);
+      const tanggal = date.toISOString().split('T')[0];
+      const entries = entriesByDate.get(tanggal) || [];
+      return {
+        tanggal,
+        pemasukan: entries.filter((entry) => entry.arah === 'PEMASUKAN').reduce((sum, entry) => sum + entry.nominal, 0),
+        pengeluaran: entries.filter((entry) => entry.arah === 'PENGELUARAN').reduce((sum, entry) => sum + entry.nominal, 0),
+        transaksi: entries,
+      };
+    });
 
     res.json(successResponse(result));
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /dashboard/sumber-input
+router.get('/sumber-input', async (req: AuthRequest, res: Response, next) => {
+  try {
+    const days = req.query.periode === '7d' ? 7 : 30;
+    const end = new Date();
+    end.setUTCHours(0, 0, 0, 0);
+    const start = new Date(end);
+    start.setUTCDate(start.getUTCDate() - days + 1);
+
+    const grouped = await prisma.transaksi.groupBy({
+      by: ['sumberInput'],
+      where: { tanggal: { gte: start, lte: end } },
+      _count: { _all: true },
+    });
+    const ai = grouped.find((row) => row.sumberInput === 'AI')?._count._all || 0;
+    const manual = grouped.find((row) => row.sumberInput === 'MANUAL')?._count._all || 0;
+    const total = ai + manual;
+
+    res.json(successResponse({
+      ai,
+      manual,
+      total,
+      aiPersen: total ? Math.round((ai / total) * 100) : 0,
+      manualPersen: total ? 100 - Math.round((ai / total) * 100) : 0,
+    }));
   } catch (error) {
     next(error);
   }
