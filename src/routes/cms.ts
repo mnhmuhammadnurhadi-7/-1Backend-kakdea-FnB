@@ -1,10 +1,9 @@
-import { Router, Response, Request } from 'express';
+import { Router, Response } from 'express';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { successResponse, errorResponse } from '../utils/response';
 import prisma from '../utils/database';
 import { logManualAction } from '../services/auditLogService';
 import { AksiLog } from '@prisma/client';
-import express from 'express';
 
 const router = Router();
 
@@ -173,142 +172,6 @@ router.delete('/content/:key', async (req: AuthRequest, res: Response, next) => 
     );
 
     res.json(successResponse({ message: 'Konten dihapus' }));
-  } catch (error) {
-    next(error);
-  }
-});
-
-// ================= CMS MENU =================
-// Untuk navigasi customer page
-
-// GET /cms/menu
-router.get('/menu', async (req: AuthRequest, res: Response, next) => {
-  try {
-    const { aktif } = req.query;
-    const where: any = {};
-    if (aktif !== undefined) where.aktif = aktif === 'true';
-
-    // @ts-ignore - Prisma client needs to be regenerated after schema update
-    const menu = await prisma.cmsMenu.findMany({
-      where,
-      orderBy: { urutan: 'asc' },
-    });
-    res.json(successResponse(menu));
-  } catch (error) {
-    next(error);
-  }
-});
-
-// GET /cms/menu/:id
-router.get('/menu/:id', async (req: AuthRequest, res: Response, next) => {
-  try {
-    const id = parseInt(String(req.params.id));
-    // @ts-ignore - Prisma client needs to be regenerated after schema update
-    const menu = await prisma.cmsMenu.findUnique({
-      where: { id },
-    });
-    if (!menu) throw errorResponse('Menu tidak ditemukan', 404);
-    res.json(successResponse(menu));
-  } catch (error) {
-    next(error);
-  }
-});
-
-// POST /cms/menu
-router.post('/menu', async (req: AuthRequest, res: Response, next) => {
-  try {
-    const { label, path, urutan, aktif } = req.body;
-
-    if (!label || !path) {
-      throw errorResponse('label dan path wajib diisi');
-    }
-
-    // @ts-ignore - Prisma client needs to be regenerated after schema update
-    const menu = await prisma.cmsMenu.create({
-      data: {
-        label,
-        path,
-        urutan: urutan ?? 0,
-        aktif: aktif !== undefined ? aktif : true,
-        dibuatOleh: req.user!.id,
-      },
-    });
-
-    await logManualAction(
-      req.user!.id,
-      'cms_menu',
-      AksiLog.TAMBAH,
-      menu.label,
-      `CMS menu baru: ${menu.label}`,
-      menu.id,
-      undefined,
-      menu
-    );
-
-    res.json(successResponse(menu));
-  } catch (error) {
-    next(error);
-  }
-});
-
-// PUT /cms/menu/:id
-router.put('/menu/:id', async (req: AuthRequest, res: Response, next) => {
-  try {
-    const id = parseInt(String(req.params.id));
-    // @ts-ignore - Prisma client needs to be regenerated after schema update
-    const before = await prisma.cmsMenu.findUnique({ where: { id } });
-    if (!before) throw errorResponse('Menu tidak ditemukan', 404);
-
-    const { label, path, urutan, aktif } = req.body;
-    const data: any = {};
-    if (label !== undefined) data.label = label;
-    if (path !== undefined) data.path = path;
-    if (urutan !== undefined) data.urutan = urutan;
-    if (aktif !== undefined) data.aktif = aktif;
-
-    // @ts-ignore - Prisma client needs to be regenerated after schema update
-    const updated = await prisma.cmsMenu.update({ where: { id }, data });
-
-    await logManualAction(
-      req.user!.id,
-      'cms_menu',
-      AksiLog.UBAH,
-      updated.label,
-      `CMS menu diubah: ${updated.label}`,
-      updated.id,
-      before,
-      updated
-    );
-
-    res.json(successResponse(updated));
-  } catch (error) {
-    next(error);
-  }
-});
-
-// DELETE /cms/menu/:id
-router.delete('/menu/:id', async (req: AuthRequest, res: Response, next) => {
-  try {
-    const id = parseInt(String(req.params.id));
-    // @ts-ignore - Prisma client needs to be regenerated after schema update
-    const menu = await prisma.cmsMenu.findUnique({ where: { id } });
-    if (!menu) throw errorResponse('Menu tidak ditemukan', 404);
-
-    // @ts-ignore - Prisma client needs to be regenerated after schema update
-    await prisma.cmsMenu.delete({ where: { id } });
-
-    await logManualAction(
-      req.user!.id,
-      'cms_menu',
-      AksiLog.HAPUS,
-      menu.label,
-      `CMS menu dihapus: ${menu.label}`,
-      menu.id,
-      menu,
-      undefined
-    );
-
-    res.json(successResponse({ message: 'Menu dihapus' }));
   } catch (error) {
     next(error);
   }

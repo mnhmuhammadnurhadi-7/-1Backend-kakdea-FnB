@@ -78,20 +78,4 @@ router.get('/content/:key', async (req: any, res: Response, next) => {
   }
 });
 
-// ================= PUBLIC CMS MENU =================
-// Tanpa authentication - untuk customer page
-
-// GET /public/cms/menu
-router.get('/menu', async (req: any, res: Response, next) => {
-  try {
-    const menu = await prisma.cmsMenu.findMany({
-      where: { aktif: true },
-      orderBy: { urutan: 'asc' },
-    });
-    res.json(successResponse(menu));
-  } catch (error) {
-    next(error);
-  }
-});
-
 export default router;

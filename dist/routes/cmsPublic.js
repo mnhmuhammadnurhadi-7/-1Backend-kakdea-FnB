@@ -80,19 +80,4 @@ router.get('/content/:key', async (req, res, next) => {
         next(error);
     }
 });
-// ================= PUBLIC CMS MENU =================
-// Tanpa authentication - untuk customer page
-// GET /public/cms/menu
-router.get('/menu', async (req, res, next) => {
-    try {
-        const menu = await database_1.default.cmsMenu.findMany({
-            where: { aktif: true },
-            orderBy: { urutan: 'asc' },
-        });
-        res.json((0, response_1.successResponse)(menu));
-    }
-    catch (error) {
-        next(error);
-    }
-});
 exports.default = router;
